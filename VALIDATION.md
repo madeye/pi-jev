@@ -5,7 +5,7 @@ Environment: macOS on Apple Silicon, Node 25.9.0, installed Pi 0.85.1. Local gen
 ## Automated checks
 
 - `npm run lint`: TypeScript strict checking and Biome passed.
-- `npm test`: 41 tests passed, covering the original request/retrieval/cache behavior plus adaptive thinking, explicit parameter preservation, local endpoint selection, turn/model lifecycle, direct command delivery, built-in tool output focusing, the benchmark launcher's proxy environment, and actual Pi-to-HTTP integration against a mock provider.
+- `npm test`: 45 tests passed, covering the original request/retrieval/cache behavior plus adaptive thinking, explicit parameter preservation, local endpoint selection, turn/model lifecycle, direct command delivery, built-in tool output focusing, the benchmark launcher's proxy environment, and actual Pi-to-HTTP integration against a mock provider.
 - `npm pack --dry-run`: extension sources and package metadata included; ignored results and credentials excluded.
 
 ## Live hosted checks
@@ -131,6 +131,22 @@ The aggregate is written to `results/tps-benchmark.json` (ignored by Git). `PI_B
 Run 1 exposed a design flaw: its closing notice read "Partial output; repeat the identical tool call to receive it complete", and the model used that escape hatch for **every** focused result, re-reading all relevant files in full. Run 2 uses the current wording ("Answer from these excerpts when they suffice; only if evidence is missing, repeat…"); no focused call was repeated and input tokens fell 48%. A first attempt with retrieval's 1.5-second deadline focused only 2 of 11 results, because five parallel cold requests timed out and opened the cooldown; focusing now uses the 3-second deadline of speed routing.
 
 **Wall time got worse in both runs.** Against a fast hosted generator, prefill of 15 KB is cheap, while each focused result waits on a hosted judgment and the smaller context did not remove a model round trip. Two further limits were visible: outputs from files irrelevant to the question pass through complete, because "no confident direct evidence" is deliberately not treated as "confidently irrelevant"; and the sample is four runs per arm on a shared hosted endpoint with large variance (4.9–28.2 s for the same baseline task). Whether the token saving becomes a time saving on a prefill-bound local model is **unmeasured**. The flag stays opt-in and experimental. Reports: `results/tps-focus-v1-benchmark.json`, `results/tps-focus-v2-benchmark.json`.
+
+### Withholding unrelated output
+
+`--jev-tools` now has a third outcome from the same hosted request: when **every** shortlisted excerpt scores below 0.5 with confidence ≥ 0.8, the output is reduced to its first and final excerpts plus a notice. For `bash` this applies only to inspection pipelines (`cat`, `grep`, `git log`, …; no redirects or substitutions). The judgment query also carries the model's latest stated intent, and a non-blocking `HEAD` warm-up opens the Jev connection at turn start.
+
+Same paired benchmark, hosted `opencode-go/deepseek-v4.1-flash` generator, three repetitions, all 12 answers correct (`results/tps-withhold-v2-benchmark.json`):
+
+| Measurement (2 tasks, 3 repetitions) | `bash` | `focus` |
+| --- | ---: | ---: |
+| Tool executions | 30 | 34 |
+| Results condensed / withheld / unchanged | — | 12 / 9 / 13 |
+| Total input tokens | 93,932 | 42,027 (−55%) |
+| Median input tokens per request | 7,821 | 925 |
+| Median end-to-end wall time | 9.6 s | 13.6 s |
+
+In the three runs where every Jev call returned, a run used 1,734–2,178 input tokens against 15,635–15,686 for the baseline (**−86% to −89%**): relevant files were condensed to about 570 bytes and unrelated files withheld. The overall figure is lower because two runs had all five parallel Jev calls hit the 3-second deadline, passing everything through and adding the wait, and in one run the model repeated three calls to get complete output. An earlier run before the warm-up (`results/tps-withhold-v1-benchmark.json`) lost three of four runs the same way; a direct probe confirmed the network path to Jev alternates between ~0.7 s responses and stretches where every request times out. **Wall time was again worse**, for the same reasons as above plus those timeouts. The token saving is real when Jev is reachable; the latency cost is unresolved, and a prefill-bound local model remains unmeasured.
 
 ## Direct lookup: measured speed path
 
