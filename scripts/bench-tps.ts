@@ -189,14 +189,18 @@ export default (pi) => {
             try {
               const text: string = event.result.content[0].text;
               if (mode === "focus")
-                return text.includes("\n[jev: kept ") ? "evaluated" : "unfocused";
+                return text.includes("\n[jev: kept ")
+                  ? "evaluated"
+                  : text.includes("\n[jev: withheld ")
+                    ? "withheld"
+                    : "unfocused";
               return JSON.parse(text).status as string;
             } catch {
               return "unparseable";
             }
           });
         const hostedEvaluated = retrieval.filter(
-          (status) => status === "evaluated" || status === "cached",
+          (status) => status === "evaluated" || status === "cached" || status === "withheld",
         ).length;
         const correct =
           task.required.every((fact) => answer.includes(fact)) &&
@@ -240,6 +244,7 @@ export default (pi) => {
           toolErrors: tools.filter((event) => event.isError).length,
           retrieval,
           hostedEvaluated,
+          withheld: retrieval.filter((status) => status === "withheld").length,
           requests: requests.length,
           inputTokens: requests.reduce((total, request) => total + request.input, 0),
           outputTokens: requests.reduce((total, request) => total + request.output, 0),

@@ -2,6 +2,12 @@ import { EnvHttpProxyAgent, fetch as proxyFetch } from "undici";
 
 // Scoped to Jev requests; never changes Pi's global networking or local model routing.
 let dispatcher: EnvHttpProxyAgent | undefined;
+// Idle connections outlive a model turn, so a warmed connection is still open for tool results.
+const connections = () => {
+  dispatcher ??= new EnvHttpProxyAgent({ keepAliveTimeout: 30_000 });
+  return dispatcher;
+};
+const origin = "https://api.typesafe.ai/";
 
 export type Question =
   | { type: "choice"; instructions: string; criteria: Record<string, string> }
@@ -85,6 +91,28 @@ export class JevClient {
     } = {},
   ) {}
 
+  /**
+   * Open the connection ahead of a likely request so that its deadline is not spent on the
+   * TLS handshake. Sends no credentials or state; failures are ignored and never counted.
+   */
+  async warm(signal?: AbortSignal): Promise<void> {
+    if (!this.options.apiKey || performance.now() < this.cooldownUntil) return;
+    const timeout = AbortSignal.timeout(3000);
+    const request = {
+      method: "HEAD",
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      redirect: "manual" as const,
+    };
+    try {
+      const response = this.options.fetch
+        ? await this.options.fetch(origin, request)
+        : await proxyFetch(origin, { ...request, dispatcher: connections() });
+      await response.body?.cancel();
+    } catch {
+      /* The real request reports its own failure. */
+    }
+  }
+
   async evaluate(
     state: unknown,
     questions: Record<string, Question>,
@@ -133,12 +161,11 @@ export class JevClient {
         signal: combined,
         redirect: "error" as const,
       };
-      if (!this.options.fetch && !dispatcher) dispatcher = new EnvHttpProxyAgent();
       const response = this.options.fetch
         ? await this.options.fetch("https://api.typesafe.ai/v1/systemone", request)
         : await proxyFetch("https://api.typesafe.ai/v1/systemone", {
             ...request,
-            dispatcher,
+            dispatcher: connections(),
           });
       if (!response.ok) {
         await response.body?.cancel();

@@ -6,7 +6,7 @@ import type {
   ExtensionContext,
   ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
-import { focusOutput } from "../src/focus.ts";
+import { focusOutput, readOnlyCommand } from "../src/focus.ts";
 import jevExtension from "../src/index.ts";
 import { JevClient } from "../src/jev.ts";
 
@@ -19,14 +19,26 @@ const output = Array.from({ length: 40 }, (_, i) =>
 const query = "What is the retry delay?";
 
 /** Scores passages containing `marker` as confident direct evidence, the rest as unrelated. */
-function rankingClient(marker: string | undefined, calls = { count: 0 }) {
+function rankingClient(
+  marker: string | undefined,
+  calls: { count: number; query?: string; warmed?: boolean } = { count: 0 },
+  unrelatedConfidence = 0.95,
+) {
   return new JevClient({
     apiKey: "test",
     fetch: async (_url, options) => {
+      if (options?.method === "HEAD") {
+        // The warm-up opens the connection only; it carries no credentials or state.
+        assert.equal(options.headers, undefined);
+        assert.equal(options.body, undefined);
+        calls.warmed = true;
+        return new Response(null, { status: 204 });
+      }
       calls.count++;
       const { state } = JSON.parse(String(options?.body)) as {
-        state: { passages: { text: string }[] };
+        state: { query: string; passages: { text: string }[] };
       };
+      calls.query = state.query;
       const answers = Object.fromEntries(
         state.passages.map((passage, i) => {
           const direct = marker !== undefined && passage.text.includes(marker);
@@ -35,7 +47,7 @@ function rankingClient(marker: string | undefined, calls = { count: 0 }) {
             {
               type: "score",
               score: direct ? 2 : 0,
-              confidence: 0.95,
+              confidence: direct ? 0.95 : unrelatedConfidence,
               probabilities: { "0": direct ? 0 : 1, "1": 0, "2": direct ? 1 : 0 },
             },
           ];
@@ -79,6 +91,47 @@ test("a hosted failure leaves the output untouched", async () => {
   assert.equal(outcome?.ok, false);
 });
 
+test("withholding keeps only the first and final excerpts of a confidently unrelated output", async () => {
+  const { text, withheld } = await focusOutput(
+    rankingClient(undefined),
+    query,
+    output,
+    undefined,
+    true,
+  );
+  assert.equal(withheld, true);
+  assert.ok(text?.startsWith("src/file0.ts:0:"));
+  assert.ok(text?.includes("src/file39.ts:39:"));
+  assert.ok(!text?.includes("retryDelayMs"));
+  assert.match(text ?? "", /\[jev: lines 3-78 omitted\]/);
+  assert.match(text ?? "", /withheld 76 of 80 lines/);
+});
+
+test("uncertain judgments are never treated as unrelated", async () => {
+  const { text } = await focusOutput(
+    rankingClient(undefined, { count: 0 }, 0.6),
+    query,
+    output,
+    undefined,
+    true,
+  );
+  assert.equal(text, undefined);
+});
+
+test("only inspection pipelines count as read-only", () => {
+  for (const command of ["cat a.md", "grep -rn retry src | head -50", "git log --oneline; ls"])
+    assert.equal(readOnlyCommand(command), true, command);
+  for (const command of [
+    "npm test",
+    "cat a.md > b.md",
+    "cat a.md && rm a.md",
+    "echo $(rm a.md)",
+    "sed -i s/a/b/ a.md",
+    "git commit -m x",
+  ])
+    assert.equal(readOnlyCommand(command), false, command);
+});
+
 function setup(client: JevClient, tools = true) {
   const handlers = new Map<string, unknown>();
   const pi = {
@@ -100,11 +153,12 @@ function setup(client: JevClient, tools = true) {
     event: BeforeAgentStartEvent,
     ctx: ExtensionContext,
   ) => Promise<unknown>;
+  const messageEnd = handlers.get("message_end") as (event: unknown) => void;
   const result = handlers.get("tool_result") as (
     event: ToolResultEvent,
     ctx: ExtensionContext,
   ) => Promise<{ content?: unknown; details?: unknown } | undefined>;
-  return { before, result };
+  return { before, result, messageEnd };
 }
 const prompt = {
   type: "before_agent_start",
@@ -112,12 +166,12 @@ const prompt = {
   systemPrompt: "",
   systemPromptOptions: { cwd: "/example" },
 } as BeforeAgentStartEvent;
-const grep = (toolName = "grep", isError = false) =>
+const grep = (toolName = "grep", isError = false, input: object = { pattern: "retry" }) =>
   ({
     type: "tool_result",
     toolName,
     toolCallId: "t1",
-    input: { pattern: "retry" },
+    input,
     content: [{ type: "text", text: output }],
     details: undefined,
     isError,
@@ -143,7 +197,7 @@ test("read output, errors, and turns without a text prompt are never altered", a
 });
 
 test("repeating a focused call verbatim returns the complete output", async () => {
-  const calls = { count: 0 };
+  const calls: { count: number; warmed?: boolean } = { count: 0 };
   const { before, result } = setup(rankingClient("retryDelayMs", calls));
   await before(prompt, {} as ExtensionContext);
   const first = await result(grep(), {} as ExtensionContext);
@@ -151,4 +205,24 @@ test("repeating a focused call verbatim returns the complete output", async () =
   assert.equal(first?.details, undefined);
   assert.equal(await result(grep(), {} as ExtensionContext), undefined);
   assert.equal(calls.count, 1);
+  assert.equal(calls.warmed, true);
+});
+
+test("unrelated output is withheld for inspection commands but not for side effects", async () => {
+  const calls: { count: number; query?: string } = { count: 0 };
+  const { before, result, messageEnd } = setup(rankingClient(undefined, calls));
+  await before(prompt, {} as ExtensionContext);
+  messageEnd({
+    message: { role: "assistant", content: [{ type: "text", text: "Checking the deploy notes." }] },
+  });
+  const inspected = await result(
+    grep("bash", false, { command: "cat deploy.md" }),
+    {} as ExtensionContext,
+  );
+  assert.match(JSON.stringify(inspected?.content), /withheld 76 of 80 lines/);
+  assert.match(calls.query ?? "", /Assistant intent: Checking the deploy notes\./);
+  assert.equal(
+    await result(grep("bash", false, { command: "npm run build" }), {} as ExtensionContext),
+    undefined,
+  );
 });

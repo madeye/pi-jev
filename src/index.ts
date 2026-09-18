@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { rankPassages, suggestSkill } from "./decisions.ts";
-import { focusableTools, focusOutput } from "./focus.ts";
+import { focusableTools, focusOutput, readOnlyCommand } from "./focus.ts";
 import { JevClient, type Outcome } from "./jev.ts";
 import { parseFindArguments, searchFiles } from "./retrieval.ts";
 import { chooseSpeed, fastPayload, supportsSpeedControl } from "./speed.ts";
@@ -15,6 +15,8 @@ export default function jevExtension(
   let turn = 0;
   let speedModel: string | undefined;
   let request = "";
+  // The model's latest stated intent; tool output is judged against it as well as the prompt.
+  let intent = "";
   // Focused calls; repeating one verbatim returns the complete output.
   const focused = new Set<string>();
   const stats = {
@@ -28,6 +30,8 @@ export default function jevExtension(
     fastRequests: 0,
     focusedResults: 0,
     focusedBytesSaved: 0,
+    withheldResults: 0,
+    withheldBytes: 0,
   };
   const record = (outcome?: Outcome) => {
     if (!outcome) return;
@@ -152,8 +156,11 @@ export default function jevExtension(
     const currentTurn = ++turn;
     speedModel = undefined;
     request = event.images?.length ? "" : event.prompt.slice(0, 2000);
+    intent = "";
     focused.clear();
     if (!enabled || event.images?.length) return;
+    // Not awaited: large tool output may arrive this turn, and its judgment has a short deadline.
+    if (pi.getFlag("jev-tools")) void client.warm(ctx.signal);
     const currentEpoch = epoch;
     const target = ctx.model ? `${ctx.model.api}:${ctx.model.baseUrl}:${ctx.model.id}` : undefined;
     const [speed, skill] = await Promise.all([
@@ -186,6 +193,14 @@ export default function jevExtension(
     if (payload) stats.fastRequests++;
     return payload;
   });
+  pi.on("message_end", (event) => {
+    if (event.message.role !== "assistant") return;
+    intent = event.message.content
+      .map((part) => (part.type === "text" ? part.text : ""))
+      .join("")
+      .trim()
+      .slice(-500);
+  });
   pi.on("tool_result", async (event, ctx) => {
     if (!enabled || !pi.getFlag("jev-tools") || !request || event.isError) return;
     const [part] = event.content;
@@ -194,17 +209,25 @@ export default function jevExtension(
     const call = `${event.toolName}:${JSON.stringify(event.input)}`;
     if (focused.delete(call)) return;
     const currentEpoch = epoch;
-    const { text, outcome } = await focusOutput(
+    const { text, withheld, outcome } = await focusOutput(
       client,
-      `${request}\nTool call: ${call.slice(0, 500)}`,
+      `${request}${intent ? `\nAssistant intent: ${intent}` : ""}\nTool call: ${call.slice(0, 500)}`,
       part.text,
       ctx.signal,
+      // A command with side effects may report them in output that looks unrelated.
+      event.toolName !== "bash" || readOnlyCommand(String(event.input.command ?? "")),
     );
     record(outcome);
     if (!text || !enabled || epoch !== currentEpoch || ctx.signal?.aborted) return;
     focused.add(call);
-    stats.focusedResults++;
-    stats.focusedBytesSaved += Buffer.byteLength(part.text) - Buffer.byteLength(text);
+    const saved = Buffer.byteLength(part.text) - Buffer.byteLength(text);
+    if (withheld) {
+      stats.withheldResults++;
+      stats.withheldBytes += saved;
+    } else {
+      stats.focusedResults++;
+      stats.focusedBytesSaved += saved;
+    }
     return { content: [{ type: "text", text }] };
   });
   pi.registerTool({
