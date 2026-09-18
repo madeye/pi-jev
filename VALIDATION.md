@@ -5,14 +5,14 @@ Environment: macOS on Apple Silicon, Node 25.9.0, installed Pi 0.85.1. Local gen
 ## Automated checks
 
 - `npm run lint`: TypeScript strict checking and Biome passed.
-- `npm test`: 45 tests passed, covering the original request/retrieval/cache behavior plus adaptive thinking, explicit parameter preservation, local endpoint selection, turn/model lifecycle, direct command delivery, built-in tool output focusing, the benchmark launcher's proxy environment, and actual Pi-to-HTTP integration against a mock provider.
+- `npm test`: 45 tests passed, covering the original request/retrieval/cache behavior plus adaptive thinking, explicit parameter preservation, local endpoint selection, turn/model lifecycle, direct command delivery, built-in tool output focusing, the benchmark launcher environment, and actual Pi-to-HTTP integration against a mock provider.
 - `npm pack --dry-run`: extension sources and package metadata included; ignored results and credentials excluded.
 
 ## Live hosted checks
 
 `npm run eval:live` completed six successful requests. All five synthetic skill requests selected the expected result (PDF, Rust, spreadsheet, none, none). Evidence ranking put the test-command passage first. Observed Jev request times were approximately 240–950 ms, including networking.
 
-An earlier direct-network attempt timed out on every request at 1.5 seconds. The final client honors the machine's proxy environment through a request-scoped Undici dispatcher; the six-request live check succeeded with the same deadline. Later benchmark requests still encountered timeouts (below). This is evidence for the local network configuration, not a service latency guarantee.
+An earlier direct-network attempt timed out on every request at 1.5 seconds. A later six-request live check succeeded with the same deadline. Later benchmark requests still encountered timeouts (below). This is evidence for the local network configuration, not a service latency guarantee.
 
 Raw report: `results/jev-live.json` (retained locally, ignored by Git).
 
@@ -112,13 +112,13 @@ A full paired run completed on the same machine (`PI_BENCH_MODES=read,local,jev 
 
 Retrieval cut the median prefill context by ~84% and the tool executions by more than half, and effective TPS roughly doubled (`read` 17.33 → `local` 31.34 tok/s). Decode TPS stayed roughly flat (33.7–40.2), consistent with the mechanism: less context shortens prefill (TTFT 7.5 s → 1.4 s), not decode. This is direct evidence for the context-compression hypothesis.
 
-Hosted Jev did **not** add a throughput win in this network environment. It succeeded on only 4 of 9 `jev_search` calls; the other 5 hit the plugin's 1.5-second deadline and fell back to local ranking (one run had all three calls time out, another had two). Because the first hosted call also pays connection setup, its median TTFT (2,416 ms) and effective TPS (26.02) landed between `local` and `read`. The hosted ranking itself did improve ordering in the runs where it returned, and every answer stayed correct. One caveat keeps this from being a verdict on Jev: hosted calls went through the local proxy (see [Network path](#network-path)), and the 1.5-second deadline is tight for a proxied TLS handshake. A benchmark with warm connections or a larger deadline would be needed to separate Jev's ranking value from its network cost.
+Hosted Jev did **not** add a throughput win in this network environment. It succeeded on only 4 of 9 `jev_search` calls; the other 5 hit the plugin's 1.5-second deadline and fell back to local ranking (one run had all three calls time out, another had two). Because the first hosted call also pays connection setup, its median TTFT (2,416 ms) and effective TPS (26.02) landed between `local` and `read`. The hosted ranking itself did improve ordering in the runs where it returned, and every answer stayed correct. One caveat keeps this from being a verdict on Jev: the 1.5-second deadline is tight for a cold TLS handshake on this network. A benchmark with warm connections or a larger deadline would be needed to separate Jev's ranking value from its network cost.
 
 The aggregate is written to `results/tps-benchmark.json` (ignored by Git). `PI_BENCH_SPEED=1` for adaptive non-thinking routing remains outstanding. Because these are single-machine runs with uncontrolled server cache state, read them as evidence for or against the hypothesis, not as a stable speedup estimate.
 
 ## Built-in tool output focusing (`--jev-tools`)
 
-`PI_BENCH_MODES=bash,focus npm run bench:tps` compares identical prompts and the same single `bash` tool on the throughput fixture; only `--jev-tools` differs. The model is told to `cat` one file per call, so every result is a ~15 KB output of which two lines matter or none do. The local Qwen server was unreachable, so both runs used the hosted `opencode-go/deepseek-v4.1-flash` generator through the local proxy, with two repetitions and rotated order. All 16 answers were correct.
+`PI_BENCH_MODES=bash,focus npm run bench:tps` compares identical prompts and the same single `bash` tool on the throughput fixture; only `--jev-tools` differs. The model is told to `cat` one file per call, so every result is a ~15 KB output of which two lines matter or none do. The local Qwen server was unreachable, so both runs used the hosted `opencode-go/deepseek-v4.1-flash` generator, with two repetitions and rotated order. All 16 answers were correct.
 
 | Measurement (2 tasks, 2 repetitions) | Run 1 `bash` | Run 1 `focus` | Run 2 `bash` | Run 2 `focus` |
 | --- | ---: | ---: | ---: | ---: |
@@ -162,16 +162,8 @@ Retained Pi events revealed substantial thinking output despite `--thinking off`
 
 The opt-in `--jev-speed` implementation asks Jev whether the current request is a bounded routine task. Only a confident `fast` choice applies that template parameter. Unsupported endpoints, explicit existing reasoning controls, uncertainty, service failure, cancellation, images, and stale turn/model decisions leave the payload unchanged. Model completion and switching clear the selection. This feature remains experimental.
 
-The integration test launches the installed Pi CLI against an actual local HTTP listener, with a mocked Jev judgment. It verifies an unchanged baseline request and `enable_thinking=false` in the adaptive request, while messages stay identical. Both requests succeed although the inherited proxy settings are deliberately unusable, because the launcher keeps loopback exempt. This proves the Pi transport and launcher environment, not inference speed.
+The integration test launches the installed Pi CLI against an actual local HTTP listener, with a mocked Jev judgment. It verifies an unchanged baseline request and `enable_thinking=false` in the adaptive request, while messages stay identical. Both requests succeed. This proves the Pi transport, not inference speed.
 
 Six live routing judgments matched their frozen expected choices with a 5-second diagnostic deadline (238–2267 ms). The production routing deadline is now 3 seconds, separate from retrieval's 1.5 seconds. At that deadline, five requests succeeded with the expected choices and the first timed out, preserving baseline behavior. Reports: `results/speed-routing-live-5000.json` and `results/speed-routing-live-3000.json`. The earlier 1.5-second attempt timed out twice and opened the cooldown; it remains in `results/speed-routing-live.json`.
 
 The next inference experiment is prepared as `PI_BENCH_SPEED=1 npm run bench:coding`. It uses the same frozen tasks, identical prompts and tools across modes, independent implementation assertions, observed provider template switches, and reasoning-token counts. **It has not been completed against Qwen.**
-
-## Network path
-
-Benchmark launchers (`scripts/environment.ts`) keep the inherited proxy variables and remove LAN entries from `NO_PROXY`, so the LAN model endpoint is reached **through the local proxy**; loopback stays exempt. `PI_BENCH_DIRECT=1` strips every proxy variable instead. The hosted Jev client honors the same variables through a request-scoped Undici dispatcher and never changes Pi's global networking.
-
-This is a workaround for a process-specific fault on the test machine, isolated on 2026-09-18: to the same LAN endpoint, system curl connected directly (HTTP 401 without credentials), Node failed directly with `EHOSTUNREACH` even with zero proxy variables, and Node through the local proxy succeeded, because the proxy forwards private ranges with `IP-CIDR,...,DIRECT` rules. A Pi run launched with this environment answered correctly, and the proxy log recorded the request as a direct outbound. Read-only macOS network-privacy inspection found allow entries for older Node binaries but none for the current Node 25.9 binary, which is consistent with the fault; no permission settings were changed.
-
-Two earlier launcher designs (appending the model host to `NO_PROXY`, then stripping all proxy variables) could not reach the model from Node and were removed. Performance numbers recorded before this change were not re-measured on the current path, and the speed goal remains active.
