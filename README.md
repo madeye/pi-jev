@@ -57,8 +57,6 @@ This fast path returns excerpts, not a synthesized answer. It also works without
 
 Loading the extension with `TYPESAFE_API_KEY` set enables hosted ranking when its tools are called. There is no automatic request before model generation by default. Without a key, `jev_search` still performs local retrieval. Standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` variables (and lowercase forms) are honored for Jev without altering Pi's global networking.
 
-The benchmark scripts keep the inherited proxy variables but remove LAN entries from `NO_PROXY` (loopback stays exempt), so a LAN model endpoint is reached through the local proxy, which must route private ranges directly (for mihomo/meow: `IP-CIDR,192.168.0.0/16,DIRECT,no-resolve` and siblings). This works around direct LAN connections from Node failing with `EHOSTUNREACH` on macOS; see [VALIDATION.md](VALIDATION.md#network-path). Nothing global is changed. When launching Pi manually, do the same, for example `NO_PROXY=localhost,127.0.0.1,::1 pi ...`. Set `PI_BENCH_DIRECT=1` to strip every proxy variable and connect directly instead.
-
 ## Experimental adaptive thinking
 
 `pi -e ./src/index.ts --jev-speed --model local-qwen/qwen3.8-27b` enables an experimental speed route. Jev classifies the current request once before generation with a 3-second deadline (retrieval retains 1.5 seconds). A confident routine-task judgment sets `chat_template_kwargs.enable_thinking=false` on that turn's Qwen requests. Complex or ambiguous requests, images, oversized prompts, uncertain judgments, and service failures preserve the original payload. This adds a hosted request, so its net benefit must be measured.
