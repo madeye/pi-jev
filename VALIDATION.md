@@ -95,21 +95,42 @@ Jev retrieval reduced reported input tokens by 71.5%, but did **not** reduce med
 
 ## Throughput (TPS) harness
 
-`npm run bench:tps` adds the missing throughput view. Earlier experiments reported wall time and token totals, but not whether less context or fewer tool calls actually changes generation throughput. The harness runs frozen multi-file policy tasks where each answer needs facts from several large, padded files with archived distractors. The `read` mode reads full files; the `jev` mode calls `jev_search` with every path and limit 9. An observer extension records per-request input/output tokens, time to first token (prefill), and decode time; the report aggregates effective TPS (`output / request wall time`), decode TPS (`output / only decode time`), median and p95 input tokens, tool executions, and end-to-end wall time. Answers are checked against the frozen current values, so speed cannot be bought with a wrong answer. Unlike the coding benchmark, the `jev` mode exposes only `jev_search`, so measured differences belong to retrieval rather than to the model choosing to ignore it.
+`npm run bench:tps` adds the missing throughput view. Earlier experiments reported wall time and token totals, but not whether less context or fewer tool calls actually changes generation throughput. The harness runs frozen multi-file policy tasks where each answer needs facts from several large, padded files with archived distractors. The `read` mode reads full files; the `local` and `jev` modes call `jev_search` with every path and limit 9, with `local` using only on-device ranking and `jev` adding the hosted judgment. An observer extension records per-request input/output tokens, time to first token (prefill), and decode time; the report aggregates effective TPS (`output / request wall time`), decode TPS (`output / only decode time`), median and p95 input tokens, tool executions, and end-to-end wall time. Answers are checked against the frozen current values, so speed cannot be bought with a wrong answer. Unlike the coding benchmark, the `jev` mode exposes only `jev_search`, so measured differences belong to retrieval rather than to the model choosing to ignore it.
 
-A keyless smoke run completed on the same machine (`PI_BENCH_MODES=read,local PI_BENCH_REPEATS=1`) with all four answers correct. Both tasks need three files' worth of current facts among five padded files with archived distractors.
+A full paired run completed on the same machine (`PI_BENCH_MODES=read,local,jev PI_BENCH_REPEATS=2`, local `local-qwen/qwen3.8-27b` generator, hosted `jev-1.13.0`). All 12 answers were correct. Both tasks need three files' worth of current facts among five padded files with archived distractors.
 
-| Measurement (2 tasks, 1 repetition) | Full-file `read` | Local `jev_search` (no hosted Jev) |
-| --- | ---: | ---: |
-| Tool executions | 10 | 5 |
-| Median input tokens | 8,641 | 1,672 |
-| p95 input tokens | 16,340 | 3,139 |
-| Median effective TPS | 17.86 tok/s | 26.33 tok/s |
-| Median decode TPS | 48.36 tok/s | 31.81 tok/s |
-| Median TTFT | 8,376 ms | 1,926 ms |
-| Median end-to-end wall time | 27.7 s | 21.8 s |
+| Measurement (2 tasks, 2 repetitions) | Full-file `read` | Local `jev_search` | Hosted `jev_search` |
+| --- | ---: | ---: | ---: |
+| Tool executions | 20 | 8 | 9 |
+| Median input tokens | 8,613 | 1,371 | 1,349 |
+| p95 input tokens | 16,333 | 3,105 | 3,204 |
+| Median effective TPS | 17.33 tok/s | 31.34 tok/s | 26.02 tok/s |
+| Median decode TPS | 37.79 tok/s | 40.23 tok/s | 33.74 tok/s |
+| Median TTFT (prefill) | 7,452 ms | 1,415 ms | 2,416 ms |
+| Median end-to-end wall time | 27.7 s | 15.0 s | 22.2 s |
+| Hosted rankings succeeded | — | 0/8 (local only) | 4/9 |
 
-Local retrieval cut the median prefill context by about 80% and halved tool executions, and effective TPS rose even though decode TPS did not (small samples; decode speed is noisy here). This supports the context-compression hypothesis for local retrieval. It does **not** yet isolate Jev: the hosted `jev` mode adds ranking latency and one hosted call, and it was not run because it requires a live `TYPESAFE_API_KEY`. That paired measurement, plus `PI_BENCH_SPEED=1` for adaptive non-thinking routing, remains outstanding. The aggregate is written to `results/tps-benchmark.json` (ignored by Git). Because one run has uncontrolled server cache state, read this as evidence for or against the hypothesis, not as a stable speedup estimate.
+Retrieval cut the median prefill context by ~84% and the tool executions by more than half, and effective TPS roughly doubled (`read` 17.33 → `local` 31.34 tok/s). Decode TPS stayed roughly flat (33.7–40.2), consistent with the mechanism: less context shortens prefill (TTFT 7.5 s → 1.4 s), not decode. This is direct evidence for the context-compression hypothesis.
+
+Hosted Jev did **not** add a throughput win in this network environment. It succeeded on only 4 of 9 `jev_search` calls; the other 5 hit the plugin's 1.5-second deadline and fell back to local ranking (one run had all three calls time out, another had two). Because the first hosted call also pays connection setup, its median TTFT (2,416 ms) and effective TPS (26.02) landed between `local` and `read`. The hosted ranking itself did improve ordering in the runs where it returned, and every answer stayed correct. Two caveats keep this from being a verdict on Jev: the benchmark harness strips proxy variables by default, so this run used `PI_BENCH_KEEP_PROXY=1` with `NO_PROXY` set to the LAN model host, and the 1.5-second deadline is tight for a proxied TLS handshake. A benchmark with warm connections or a larger deadline would be needed to separate Jev's ranking value from its network cost.
+
+The aggregate is written to `results/tps-benchmark.json` (ignored by Git). `PI_BENCH_SPEED=1` for adaptive non-thinking routing remains outstanding. Because these are single-machine runs with uncontrolled server cache state, read them as evidence for or against the hypothesis, not as a stable speedup estimate.
+
+## Built-in tool output focusing (`--jev-tools`)
+
+`PI_BENCH_MODES=bash,focus npm run bench:tps` compares identical prompts and the same single `bash` tool on the throughput fixture; only `--jev-tools` differs. The model is told to `cat` one file per call, so every result is a ~15 KB output of which two lines matter or none do. The local Qwen server was unreachable, so both runs used the hosted `opencode-go/deepseek-v4.1-flash` generator through the local proxy (`PI_BENCH_KEEP_PROXY=1`), with two repetitions and rotated order. All 16 answers were correct.
+
+| Measurement (2 tasks, 2 repetitions) | Run 1 `bash` | Run 1 `focus` | Run 2 `bash` | Run 2 `focus` |
+| --- | ---: | ---: | ---: | ---: |
+| Tool executions | 20 | 26 | 21 | 20 |
+| Results focused | — | 10/26 | — | 11/20 |
+| Total input tokens | 62,732 | 45,165 | 62,807 | 32,890 |
+| p95 input tokens | 14,750 | 9,127 | 14,717 | 9,181 |
+| Median end-to-end wall time | 10.6 s | 15.3 s | 8.2 s | 12.3 s |
+
+Run 1 exposed a design flaw: its closing notice read "Partial output; repeat the identical tool call to receive it complete", and the model used that escape hatch for **every** focused result, re-reading all relevant files in full. Run 2 uses the current wording ("Answer from these excerpts when they suffice; only if evidence is missing, repeat…"); no focused call was repeated and input tokens fell 48%. A first attempt with retrieval's 1.5-second deadline focused only 2 of 11 results, because five parallel cold requests timed out and opened the cooldown; focusing now uses the 3-second deadline of speed routing.
+
+**Wall time got worse in both runs.** Against a fast hosted generator, prefill of 15 KB is cheap, while each focused result waits on a hosted judgment and the smaller context did not remove a model round trip. Two further limits were visible: outputs from files irrelevant to the question pass through complete, because "no confident direct evidence" is deliberately not treated as "confidently irrelevant"; and the sample is four runs per arm on a shared hosted endpoint with large variance (4.9–28.2 s for the same baseline task). Whether the token saving becomes a time saving on a prefill-bound local model is **unmeasured**. The flag stays opt-in and experimental. Reports: `results/tps-focus-v1-benchmark.json`, `results/tps-focus-v2-benchmark.json`.
 
 ## Direct lookup: measured speed path
 
@@ -138,5 +159,7 @@ After the user required direct LAN access, every benchmark launcher was updated 
 The user subsequently requested removal of proxy environment variables for Pi and curl, superseding the bypass-list approach. Benchmark launchers now remove every environment key containing `proxy` (case-insensitively), including `NO_PROXY` and runtime/package-manager variants. The regression test verifies that unrelated variables remain unchanged. Lint and all 29 tests passed after this change.
 
 A fresh check launched Pi, system curl, and Homebrew curl with zero proxy variables. System curl reached the model endpoint directly (HTTP 401 without credentials); Homebrew curl failed immediately, and Pi returned Connection error. This demonstrates that inherited proxy variables are no longer the outstanding cause.
+
+The discrepancy was then isolated on 2026-09-18: to the same endpoint, system curl connected directly (HTTP 401 without credentials), Node failed directly with `EHOSTUNREACH`, and Node through the local proxy succeeded (HTTP 401), because the proxy already forwards private ranges with `IP-CIDR,...,DIRECT` rules. The launchers therefore now keep the inherited proxy and remove LAN entries from `NO_PROXY` (loopback stays exempt); `PI_BENCH_DIRECT=1` restores full stripping and replaces the earlier `PI_BENCH_KEEP_PROXY=1` switch mentioned above. A Pi run launched with this environment against the LAN model answered correctly, and the proxy log recorded the request matching `IP-CIDR(192.168.0.0/16)` with a direct outbound. Lint and all 41 tests passed. Performance numbers recorded earlier were not re-measured on this path.
 
 Read-only macOS network-privacy inspection found allow entries for older Node binaries but no matching entry for the current Node 25.9 binary. This is consistent with the process-specific access discrepancy; no permission settings were changed. The retained Node 25.8 copy could not run because its older simdjson library is absent. Live direct Pi inference remains unavailable, and the speed goal remains active.

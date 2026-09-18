@@ -41,6 +41,10 @@ export interface RunSample {
   elapsedMs: number;
   toolCalls: number;
   requests: RequestSample[];
+  /** jev_search calls whose hosted ranking succeeded (evaluated or cached). */
+  hostedEvaluated?: number;
+  /** jev_search calls that fell back to local ranking. */
+  hostedFallback?: number;
 }
 
 export interface Aggregate {
@@ -48,6 +52,8 @@ export interface Aggregate {
   requests: number;
   toolCallsTotal: number;
   toolCallsMedian: number | undefined;
+  hostedEvaluatedTotal: number;
+  hostedFallbackTotal: number;
   inputTokensTotal: number;
   inputTokensMedian: number | undefined;
   inputTokensP95: number | undefined;
@@ -86,6 +92,8 @@ export function aggregate(runs: readonly RunSample[]): Aggregate {
     requests: requests.length,
     toolCallsTotal: runs.reduce((total, run) => total + run.toolCalls, 0),
     toolCallsMedian: median(runs.map((run) => run.toolCalls)),
+    hostedEvaluatedTotal: runs.reduce((total, run) => total + (run.hostedEvaluated ?? 0), 0),
+    hostedFallbackTotal: runs.reduce((total, run) => total + (run.hostedFallback ?? 0), 0),
     inputTokensTotal: inputs.reduce((total, value) => total + value, 0),
     inputTokensMedian: median(inputs),
     inputTokensP95: percentile(inputs, 0.95),

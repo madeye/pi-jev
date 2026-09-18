@@ -8,6 +8,9 @@ Pi loads it directly, so no build step is required.
 
 - Node.js 22 or newer (`node --version`).
 - Pi `@earendil-works/pi-coding-agent` 0.85.x. Older `@mariozechner` releases are not tested.
+- The workspace default model is `opencode-go/deepseek-v4.1-flash`, configured as
+  `defaultProvider`/`defaultModel` in `~/.pi/agent/settings.json`. Any configured model works;
+  the extension does not configure or download models.
 - Optional: a `TYPESAFE_API_KEY` for hosted Jev ranking. Without it, `jev_search`
   still works using local retrieval and no network requests are made.
 
@@ -27,17 +30,18 @@ It is not needed just to load the extension, but it is needed to run `npm test` 
 Load the extension file for a single Pi run without changing any settings:
 
 ```sh
-pi -e ./src/index.ts --model local-qwen/qwen3.8-27b
+pi -e ./src/index.ts --model opencode-go/deepseek-v4.1-flash
 ```
 
 - `-e` accepts a file or a directory and can be repeated.
+- `opencode-go/deepseek-v4.1-flash` is the workspace default model, so `--model` may be omitted.
 - Use your own configured provider/model id; the extension does not configure or download models.
 - Nothing is written to settings, so the extension disappears when the process exits.
 
 To set the hosted key for that run:
 
 ```sh
-TYPESAFE_API_KEY=... pi -e ./src/index.ts --model local-qwen/qwen3.8-27b
+TYPESAFE_API_KEY=... pi -e ./src/index.ts --model opencode-go/deepseek-v4.1-flash
 ```
 
 ## Option 2 — Install a local checkout persistently
