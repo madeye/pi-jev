@@ -53,11 +53,14 @@ export interface RankedPassage extends Passage {
   score?: number;
   confidence?: number;
 }
+export const isDirectEvidence = (p: RankedPassage) =>
+  (p.confidence ?? 0) >= 0.8 && (p.score ?? 0) >= 1.5;
 export async function rankPassages(
   client: JevClient,
   query: string,
   passages: Passage[],
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<{ passages: RankedPassage[]; outcome?: Outcome }> {
   if (
     !query.trim() ||
@@ -80,7 +83,7 @@ export async function rankPassages(
       },
     ]),
   );
-  const outcome = await client.evaluate({ query, passages }, questions, signal);
+  const outcome = await client.evaluate({ query, passages }, questions, signal, timeoutMs);
   if (!outcome.ok) return { passages, outcome };
   const ranked: RankedPassage[] = passages.map((passage, i) => {
     const answer = outcome.result.answers[`p${i}`];
@@ -90,8 +93,7 @@ export async function rankPassages(
   });
   // Promote confident direct evidence. Uncertainty about background does not veto it.
   // All other passages keep their relative order; nothing is deleted.
-  const priority = (p: RankedPassage) =>
-    (p.confidence ?? 0) >= 0.8 && (p.score ?? 0) >= 1.5 ? (p.score ?? 0) : -1;
+  const priority = (p: RankedPassage) => (isDirectEvidence(p) ? (p.score ?? 0) : -1);
   ranked.sort((a, b) => priority(b) - priority(a));
   return { passages: ranked, outcome };
 }

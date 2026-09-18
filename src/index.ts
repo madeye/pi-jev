@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { rankPassages, suggestSkill } from "./decisions.ts";
+import { focusableTools, focusOutput } from "./focus.ts";
 import { JevClient, type Outcome } from "./jev.ts";
 import { parseFindArguments, searchFiles } from "./retrieval.ts";
 import { chooseSpeed, fastPayload, supportsSpeedControl } from "./speed.ts";
@@ -13,6 +14,9 @@ export default function jevExtension(
   let epoch = 0;
   let turn = 0;
   let speedModel: string | undefined;
+  let request = "";
+  // Focused calls; repeating one verbatim returns the complete output.
+  const focused = new Set<string>();
   const stats = {
     calls: 0,
     cacheHits: 0,
@@ -22,6 +26,8 @@ export default function jevExtension(
     suggestions: 0,
     fastTurns: 0,
     fastRequests: 0,
+    focusedResults: 0,
+    focusedBytesSaved: 0,
   };
   const record = (outcome?: Outcome) => {
     if (!outcome) return;
@@ -50,8 +56,16 @@ export default function jevExtension(
     type: "boolean",
     default: false,
   });
+  pi.registerFlag("jev-tools", {
+    description:
+      "Experimental: condense large grep/find/ls/bash output to Jev-judged direct evidence",
+    type: "boolean",
+    default: false,
+  });
   pi.on("session_start", (_event, ctx) => {
     epoch++;
+    request = "";
+    focused.clear();
     speedModel = undefined;
     enabled = Boolean(pi.getFlag("jev")) && Boolean(process.env.TYPESAFE_API_KEY);
     ctx.ui.setStatus("jev", enabled ? "Jev: on" : "Jev: off");
@@ -137,6 +151,8 @@ export default function jevExtension(
   pi.on("before_agent_start", async (event, ctx) => {
     const currentTurn = ++turn;
     speedModel = undefined;
+    request = event.images?.length ? "" : event.prompt.slice(0, 2000);
+    focused.clear();
     if (!enabled || event.images?.length) return;
     const currentEpoch = epoch;
     const target = ctx.model ? `${ctx.model.api}:${ctx.model.baseUrl}:${ctx.model.id}` : undefined;
@@ -169,6 +185,27 @@ export default function jevExtension(
     const payload = fastPayload(event.payload);
     if (payload) stats.fastRequests++;
     return payload;
+  });
+  pi.on("tool_result", async (event, ctx) => {
+    if (!enabled || !pi.getFlag("jev-tools") || !request || event.isError) return;
+    const [part] = event.content;
+    if (!focusableTools.has(event.toolName) || event.content.length !== 1 || part?.type !== "text")
+      return;
+    const call = `${event.toolName}:${JSON.stringify(event.input)}`;
+    if (focused.delete(call)) return;
+    const currentEpoch = epoch;
+    const { text, outcome } = await focusOutput(
+      client,
+      `${request}\nTool call: ${call.slice(0, 500)}`,
+      part.text,
+      ctx.signal,
+    );
+    record(outcome);
+    if (!text || !enabled || epoch !== currentEpoch || ctx.signal?.aborted) return;
+    focused.add(call);
+    stats.focusedResults++;
+    stats.focusedBytesSaved += Buffer.byteLength(part.text) - Buffer.byteLength(text);
+    return { content: [{ type: "text", text }] };
   });
   pi.registerTool({
     name: "jev_search",

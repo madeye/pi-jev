@@ -15,8 +15,36 @@ interface Snippet {
 const stopwords = new Set(
   "a an the is are for to of in on and or what which how does where".split(" "),
 );
-const words = (text: string) =>
+export const words = (text: string) =>
   new Set((text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? []).filter((w) => !stopwords.has(w)));
+
+/** Split text into excerpts of at most 12 lines and 800 bytes, breaking at blank lines. */
+export function chunkLines(text: string) {
+  const lines = text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const chunks: { startLine: number; endLine: number; text: string }[] = [];
+  let chunk = "";
+  let start = 1;
+  let end = 0;
+  let skipped = 0;
+  const flush = () => {
+    if (chunk.trim()) chunks.push({ startLine: start, endLine: end, text: chunk });
+    chunk = "";
+  };
+  for (const [i, line] of lines.entries()) {
+    if (Buffer.byteLength(line) > 800) {
+      flush();
+      skipped++;
+      continue;
+    }
+    if (Buffer.byteLength(chunk + line) > 800 || i + 1 - start >= 12) flush();
+    if (!chunk) start = i + 1;
+    chunk += line;
+    end = i + 1;
+    if (!line.trim()) flush();
+  }
+  flush();
+  return { chunks, skipped, lineCount: lines.length };
+}
 
 export function parseFindArguments(args: string): { query: string; paths: string[] } {
   const separator = args.lastIndexOf(" -- ");
@@ -81,35 +109,8 @@ export async function searchFiles(
       }
       const text = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, size));
       if (text.includes("\0")) throw new Error("binary");
-      const lines = text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
-      let chunk = "";
-      let start = 1;
-      let end = 0;
-      let skipped = 0;
-      const flush = () => {
-        if (chunk.trim())
-          snippets.push({
-            id: `c${snippets.length}`,
-            path,
-            startLine: start,
-            endLine: end,
-            text: chunk,
-          });
-        chunk = "";
-      };
-      for (const [i, line] of lines.entries()) {
-        if (Buffer.byteLength(line) > 800) {
-          flush();
-          skipped++;
-          continue;
-        }
-        if (Buffer.byteLength(chunk + line) > 800 || i + 1 - start >= 12) flush();
-        if (!chunk) start = i + 1;
-        chunk += line;
-        end = i + 1;
-        if (!line.trim()) flush();
-      }
-      flush();
+      const { chunks, skipped } = chunkLines(text);
+      for (const chunk of chunks) snippets.push({ id: `c${snippets.length}`, path, ...chunk });
       if (skipped)
         warnings.push(`${path}: ${skipped} lines over 800 bytes were not indexed; use read`);
     } catch {
