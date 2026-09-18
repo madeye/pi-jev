@@ -122,12 +122,6 @@ shell profile so every Pi session inherits it:
 export TYPESAFE_API_KEY="..."
 ```
 
-Proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and lowercase forms) are honored
-for the hosted Jev client without altering Pi's global networking. Pi's own connection to
-the model is decided by the environment it starts with — extension hooks cannot reconfigure
-it afterwards — so set `NO_PROXY` before launching Pi if your model endpoint needs a
-different route.
-
 ## Verify, update, and remove
 
 ```sh
