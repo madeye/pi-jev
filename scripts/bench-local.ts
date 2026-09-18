@@ -7,7 +7,7 @@ import { benchmarkEnvironment } from "./environment.ts";
 
 const run = promisify(execFile);
 const model = process.env.PI_BENCH_MODEL ?? "local-qwen/qwen3.8-27b";
-const env = await benchmarkEnvironment();
+const env = benchmarkEnvironment();
 const client = new JevClient({ apiKey: process.env.TYPESAFE_API_KEY });
 if (!process.env.TYPESAFE_API_KEY) throw new Error("Set TYPESAFE_API_KEY before benchmarking.");
 const skills = [

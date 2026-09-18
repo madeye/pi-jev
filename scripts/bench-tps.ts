@@ -69,7 +69,7 @@ if (modes.some(hosted) && !process.env.TYPESAFE_API_KEY)
     "Set TYPESAFE_API_KEY for the jev and focus modes, use PI_BENCH_MODES=read,local, or run bench:retrieval for keyless retrieval",
   );
 
-const baseEnv = await benchmarkEnvironment();
+const baseEnv = benchmarkEnvironment();
 const fileNames = Object.keys(files);
 const rows: Record<string, unknown>[] = [];
 const samplesByMode: Record<string, RunSample[]> = Object.fromEntries(
