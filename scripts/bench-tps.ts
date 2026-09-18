@@ -60,17 +60,21 @@ const modes = (process.env.PI_BENCH_MODES ?? "read,local,jev")
   .split(",")
   .map((mode) => mode.trim())
   .filter(Boolean);
-if (modes.length === 0 || modes.some((mode) => !["read", "local", "jev"].includes(mode)))
-  throw new Error("PI_BENCH_MODES must be a comma-separated subset of read,local,jev");
-if (modes.includes("jev") && !process.env.TYPESAFE_API_KEY)
+const allModes = ["read", "local", "jev", "bash", "focus"];
+const hosted = (mode: string) => mode === "jev" || mode === "focus";
+if (modes.length === 0 || modes.some((mode) => !allModes.includes(mode)))
+  throw new Error(`PI_BENCH_MODES must be a comma-separated subset of ${allModes.join(",")}`);
+if (modes.some(hosted) && !process.env.TYPESAFE_API_KEY)
   throw new Error(
-    "Set TYPESAFE_API_KEY for the jev mode, use PI_BENCH_MODES=read,local, or run bench:retrieval for keyless retrieval",
+    "Set TYPESAFE_API_KEY for the jev and focus modes, use PI_BENCH_MODES=read,local, or run bench:retrieval for keyless retrieval",
   );
 
 const baseEnv = await benchmarkEnvironment();
 const fileNames = Object.keys(files);
 const rows: Record<string, unknown>[] = [];
-const samplesByMode: Record<string, RunSample[]> = { read: [], local: [], jev: [] };
+const samplesByMode: Record<string, RunSample[]> = Object.fromEntries(
+  allModes.map((mode) => [mode, []]),
+);
 await mkdir("results", { recursive: true });
 
 for (let repeat = 0; repeat < repeats; repeat++) {
@@ -84,7 +88,7 @@ for (let repeat = 0; repeat < repeats; repeat++) {
       const timingPath = join(cwd, "timings.jsonl");
       const observer = join(cwd, "observer.ts");
       const env: NodeJS.ProcessEnv = { ...baseEnv };
-      if (mode !== "jev") delete env.TYPESAFE_API_KEY;
+      if (!hosted(mode)) delete env.TYPESAFE_API_KEY;
       for (const [name, content] of Object.entries(files)) {
         await writeFile(join(cwd, name), `${content}\n`);
       }
@@ -122,8 +126,11 @@ export default (pi) => {
   });
 };\n`,
       );
-      const prompt =
-        mode === "read"
+      // bash and focus share one prompt and tool set; only --jev-tools differs.
+      const shell = mode === "bash" || mode === "focus";
+      const prompt = shell
+        ? `Files in the current directory: ${fileNames.join(", ")}. Use bash to cat one file per call, gather current policy evidence, and answer this question: ${task.question} Rely only on current, non-archived values. Finish with a single line beginning "ANSWER:" that lists the requested values.`
+        : mode === "read"
           ? `Files in the current directory: ${fileNames.join(", ")}. Use read to gather current policy evidence and answer this question: ${task.question} Rely only on current, non-archived values. Finish with a single line beginning "ANSWER:" that lists the requested values.`
           : `Files in the current directory: ${fileNames.join(", ")}. Use jev_search with paths ${JSON.stringify(fileNames)} and limit 9 to retrieve current policy evidence and answer this question: ${task.question} You may call jev_search more than once. Rely only on current, non-archived values. Finish with a single line beginning "ANSWER:" that lists the requested values.${mode === "local" ? " Jev is unavailable; jev_search uses local ranking." : ""}`;
       const start = performance.now();
@@ -142,8 +149,9 @@ export default (pi) => {
             "-e",
             observer,
             ...(speedExperiment && mode === "jev" ? ["--jev-speed"] : []),
+            ...(mode === "focus" ? ["--jev-tools"] : []),
             "--tools",
-            mode === "read" ? "read" : "jev_search",
+            shell ? "bash" : mode === "read" ? "read" : "jev_search",
             "--model",
             model,
             "--thinking",
@@ -175,6 +183,21 @@ export default (pi) => {
           .join("")
           .trim();
         const tools = events.filter((event) => event.type === "tool_execution_end");
+        const retrieval = tools
+          .filter((event) => event.toolName === "jev_search" || mode === "focus")
+          .map((event) => {
+            try {
+              const text: string = event.result.content[0].text;
+              if (mode === "focus")
+                return text.includes("\n[jev: kept ") ? "evaluated" : "unfocused";
+              return JSON.parse(text).status as string;
+            } catch {
+              return "unparseable";
+            }
+          });
+        const hostedEvaluated = retrieval.filter(
+          (status) => status === "evaluated" || status === "cached",
+        ).length;
         const correct =
           task.required.every((fact) => answer.includes(fact)) &&
           tools.length > 0 &&
@@ -197,7 +220,13 @@ export default (pi) => {
         } catch {
           /* No provider request was observed. */
         }
-        const runSample: RunSample = { elapsedMs, toolCalls: tools.length, requests };
+        const runSample: RunSample = {
+          elapsedMs,
+          toolCalls: tools.length,
+          requests,
+          hostedEvaluated,
+          hostedFallback: retrieval.length - hostedEvaluated,
+        };
         samplesByMode[mode]?.push(runSample);
         rows.push({
           repeat,
@@ -209,6 +238,8 @@ export default (pi) => {
           toolCalls: tools.length,
           toolNames: tools.map((event) => event.toolName),
           toolErrors: tools.filter((event) => event.isError).length,
+          retrieval,
+          hostedEvaluated,
           requests: requests.length,
           inputTokens: requests.reduce((total, request) => total + request.input, 0),
           outputTokens: requests.reduce((total, request) => total + request.output, 0),
@@ -244,7 +275,7 @@ export default (pi) => {
             })),
             files: Object.keys(files),
             scope:
-              "Throughput comparison on frozen multi-file policy tasks using actual Pi tools. Read mode reads full padded files; jev mode retrieves excerpts. Rotated order, uncontrolled server cache. Measures context size, tool executions, prefill (TTFT), and decode TPS. Not a coding-quality or general-speed claim.",
+              "Throughput comparison on frozen multi-file policy tasks using actual Pi tools. Read mode reads full padded files; local and jev modes retrieve excerpts; bash and focus modes cat files without and with --jev-tools output focusing. Rotated order, uncontrolled server cache. Measures context size, tool executions, prefill (TTFT), and decode TPS. Not a coding-quality or general-speed claim.",
             aggregate: Object.fromEntries(
               modes.map((mode) => [mode, aggregate(samplesByMode[mode] ?? [])]),
             ),
@@ -265,7 +296,7 @@ for (const mode of modes) {
   const value = summary[mode];
   if (!value) continue;
   console.log(
-    `${mode}: ${value.requests} requests, ${value.toolCallsTotal} tool calls, median ${Math.round(value.inputTokensMedian ?? 0)} input tokens, effective ${value.effectiveTpsMedian?.toFixed(2) ?? "n/a"} tok/s, decode ${value.decodeTpsMedian?.toFixed(2) ?? "n/a"} tok/s, TTFT ${Math.round(value.ttftMsMedian ?? 0)} ms`,
+    `${mode}: ${value.requests} requests, ${value.toolCallsTotal} tool calls, median ${Math.round(value.inputTokensMedian ?? 0)} input tokens, effective ${value.effectiveTpsMedian?.toFixed(2) ?? "n/a"} tok/s, decode ${value.decodeTpsMedian?.toFixed(2) ?? "n/a"} tok/s, TTFT ${Math.round(value.ttftMsMedian ?? 0)} ms, hosted ${value.hostedEvaluatedTotal}/${value.hostedEvaluatedTotal + value.hostedFallbackTotal}`,
   );
 }
 if (rows.some((row) => !row.correct)) process.exitCode = 1;
