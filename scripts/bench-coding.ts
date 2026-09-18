@@ -50,7 +50,7 @@ const repeats = Number(process.env.PI_BENCH_REPEATS ?? 2);
 if (!Number.isInteger(repeats) || repeats < 1 || repeats > 10) throw new Error("Invalid repeats");
 if (!process.env.TYPESAFE_API_KEY) throw new Error("Set TYPESAFE_API_KEY");
 const rows: Record<string, unknown>[] = [];
-const baseEnv = await benchmarkEnvironment();
+const baseEnv = benchmarkEnvironment();
 await mkdir("results", { recursive: true });
 for (let repeat = 0; repeat < repeats; repeat++) {
   for (const [index, task] of tasks.entries()) {

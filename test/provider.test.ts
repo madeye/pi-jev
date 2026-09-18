@@ -97,7 +97,7 @@ export default (pi) => jev(pi, new JevClient({ apiKey: 'test', fetch: async () =
           cwd,
           timeout: 12_000,
           maxBuffer: 1_000_000,
-          env: await benchmarkEnvironment({
+          env: benchmarkEnvironment({
             ...process.env,
             PI_CODING_AGENT_DIR: agentDir,
             TYPESAFE_API_KEY: "test",

@@ -9,7 +9,7 @@ import { benchmarkEnvironment } from "./environment.ts";
 // Reuse the exact fixture and questions from the completed paired retrieval experiment.
 const previous = JSON.parse(await readFile("results/retrieval-large-benchmark.json", "utf8"));
 const run = promisify(execFile);
-const env = await benchmarkEnvironment();
+const env = benchmarkEnvironment();
 const extension = resolve("src/index.ts");
 const cwd = await mkdtemp(join(tmpdir(), "pi-jev-direct-"));
 const rows = [];

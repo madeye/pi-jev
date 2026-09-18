@@ -32,7 +32,7 @@ const sections = [
   "# Support\nSupport tickets should include a reproducible example and the affected version.",
 ];
 const model = process.env.PI_BENCH_MODEL ?? "local-qwen/qwen3.8-27b";
-const baseEnv = await benchmarkEnvironment();
+const baseEnv = benchmarkEnvironment();
 const padding = Number(process.env.PI_BENCH_PADDING ?? 0);
 if (!Number.isInteger(padding) || padding < 0 || padding > 200) throw new Error("Invalid padding");
 for (let i = 0; i < padding; i++) {
