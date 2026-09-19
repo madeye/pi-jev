@@ -168,7 +168,7 @@ Same paired benchmark, hosted `opencode-go/deepseek-v4.1-flash` generator, three
 
 **Latency is solved; decisiveness is not.** Once warm, every judgment returned well inside the 3-second deadline: no timeouts in the warm run, against 6 to 22 per run for the hosted service. The cold first batch took 7.8 s because Triton JIT-compiled the logprob kernels on first inference (`_fill_logprob_token_ids_kernel`, `_topk_log_softmax_kernel`), a one-time cost per engine process that `warm.sh` on the Spark now pays at start-up. But the local model condensed far fewer results (5 versus 18) and passed 15 through unchanged, so the token saving was 44% against 79%.
 
-A direct probe with the extension's exact ranking question explains the gap. On five hand-picked passages for the rate-limits query, the current public-limit passage scored 1.99 at confidence 0.99 and the padding note 0.05 at 0.96, both decisive. But the archived-limit passage landed at 0.76 confidence on "unrelated", just under the 0.8 withhold bar, and the internal-limit passage, which answers the second half of the question, was split 0.31 / 0.46 / 0.23 across the three levels. The interposer reports the top label's probability as `confidence`, a different quantity from the hosted service's calibrated estimate, and the thresholds in `src/decisions.ts` and `src/focus.ts` (0.8 confidence, score 1.5 for direct evidence, score below 0.5 to withhold) were tuned on the hosted signal. Whether re-tuning them for this model, or the interposer's `samples`/`think` options, closes the gap is unmeasured. Multi-part questions are a weak spot worth a dedicated case.
+A direct probe with the extension's exact ranking question explains the gap. On five hand-picked passages for the rate-limits query, the current public-limit passage scored 1.99 at confidence 0.99 and the padding note 0.05 at 0.96, both decisive. But the archived-limit passage landed at 0.76 confidence on "unrelated", just under the 0.8 withhold bar, and the internal-limit passage, which answers the second half of the question, was split 0.31 / 0.46 / 0.23 across the three levels. The interposer reports the top label's probability as `confidence`, a different quantity from the hosted service's calibrated estimate, and the thresholds in `src/decisions.ts` and `src/focus.ts` (0.8 confidence, score 1.5 for direct evidence, score below 0.5 to withhold) were tuned on the hosted signal. Whether re-tuning them for this model, or the interposer's `samples`/`think` options, closes the gap is measured in "Tuning DiffusionGemma" below: single-sample reads do, the floor does not. Multi-part questions remain a weak spot worth a dedicated case.
 
 Deployment notes: the engine holds ~24 GB beside Qwen's 55 GB, leaving about 4 GB of unused host RAM on the 121 GB unified box; the first start failed inside the NVIDIA driver with `NV_ERR_NO_MEMORY` until the page cache left by the 19 GB download was dropped. The interposer is an example script with no authentication, published only on the LAN. The PR is unmerged, so the overlay pins one revision. Reports: `results/tps-dgemma-v1-benchmark.json`, `results/tps-dgemma-v2-benchmark.json`.
 
@@ -207,7 +207,40 @@ The gap is concentrated on the three-fact task. On `rate-limits`, DiffusionGemma
 
 `focus` raises output tokens over the baseline with either server (notices, re-reads after a withheld result), by 900–1,300 tokens per six runs; that is small next to the input saving but not zero.
 
-**What this does and does not show.** With the network cooperating, hosted Jev saves roughly twice as much context as DiffusionGemma with the current thresholds (−79% vs −44%). Without it, hosted Jev saved 26% on the same code the same day (`tps-withhold-v3`), below DiffusionGemma's worst run, and DiffusionGemma's saving does not depend on the network at all. Whether re-tuning the thresholds for the local model's confidence signal, or asking it for more samples, recovers the −79% is the open experiment; the ceiling when every judgment is confident is the same for both.
+**What this does and does not show.** With the network cooperating, hosted Jev saves roughly twice as much context as DiffusionGemma with the current thresholds (−79% vs −44%). Without it, hosted Jev saved 26% on the same code the same day (`tps-withhold-v3`), below DiffusionGemma's worst run, and DiffusionGemma's saving does not depend on the network at all. Re-tuning is measured in "Tuning DiffusionGemma" below: asking for a single read instead of the interposer's adaptive re-sampling recovers −76% to −78%; the ceiling when every judgment is confident is the same for both.
+
+### Tuning DiffusionGemma: single-sample reads close most of the gap
+
+`npm run tune:focus` (`scripts/tune-focus.ts`) sweeps the judgment server's request extensions and the client's confidence floor over the frozen policy fixture through the extension's real `focusOutput` path and 3-second deadline, with no generator in the loop: each of the five files, for each of the two tasks, is one `cat` output, ten decisions per configuration. A decision is ideal when a relevant file is condensed and still carries its current value or a distractor is withheld; a relevant file that loses its current value is a failure whatever the byte saving. Extensions travel as top-level request fields (`TYPESAFE_REQUEST_EXTENSIONS`); the floor is `TYPESAFE_CONFIDENCE`. Reports: `results/tune-focus-dgemma*.json`.
+
+**Server-side sweep, floor 0.8** (first pass on a freshly warmed engine, then three repeats after an engine restart):
+
+| Request extension | Ideal decisions of 10 | Condensed / withheld / passed | Bytes saved | Judgment ms, median / max |
+| --- | ---: | ---: | ---: | ---: |
+| default (`samples: "auto"`, re-read when uncertain, up to 4 draws) | 8, then 8 / 8 / 8 | 3 / 5 / 2 | −76% | 430–510 / 670–1,130 |
+| `samples: 1` | 10, then 8 / 8 / 8 | 5 / 5 / 0, then 3 / 5 / 2 | −96%, then −76% | 195–350 / 265–1,470 |
+| `samples: 4` | 8 | 3 / 5 / 2 | −77% | 336 / 405 |
+| `samples: 8` | 7 | 2 / 5 / 3 | −67% | 416 / 647 |
+| `think: 32` or `96`, `steps: 2` | 0 | — | 0% | crashed the engine |
+
+Every configuration withheld all five distractors and lost no fact. Averaging over more noise draws made the model *less* decisive: the mean over draws pulls the top probability down, so a passage that a single read scores 1.9 at 0.95 confidence lands at 1.3 at 0.65 after four draws, under both bars. A single read is also two to four times faster. The `think` and `steps` extensions, which route through the engine's generation path, killed the engine core with `Index put requires the source and destination dtypes match, got Float for the destination and BFloat16 for the source` in the diffusion sampler on every attempt (two restarts); they are unusable on this build and are excluded. The one decision that stays imperfect with a single read is the passage answering only part of a multi-part question, scored around 1.3–1.6 at 0.65–0.77 confidence.
+
+**Client-side floor, with `samples: 1`, three repeats:** 0.8 gave 8 of 10 ideal each time; 0.7 and 0.6 gave 9 of 10 each time, catching that partial-answer passage, and never lost a fact or kept an archived value.
+
+**End-to-end confirmation**, same paired `bash`/`focus` throughput benchmark, hosted `opencode-go/deepseek-v4.1-flash` generator, three repetitions per run, all answers correct in every run:
+
+| Configuration | Report | Input tokens vs baseline | Per-run saving | p95 request context | `focus` tool calls | Condensed / withheld / passed | `focus` output tokens |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| default reads, floor 0.8 | `tps-dgemma-v2` | −44% | 16–72% | 11,949 | 32 | 4 / 11 / 17 | 2,602 |
+| `samples: 1`, floor 0.8 | `tps-dgemma-v3` | **−78%** | 69–89% | 3,575 | 32 | 12 / 15 / 5 | 2,637 |
+| `samples: 1`, floor 0.8, repeat | `tps-dgemma-v3b` | **−76%** | 67–87% | 3,592 | 34 | 11 / 15 / 8 | 3,304 |
+| `samples: 1`, floor 0.7 | `tps-dgemma-v4` | −56% | −3–89% | 8,909 | 40 | 15 / 15 / 10 | 3,435 |
+| `samples: 1`, floor 0.7, repeat | `tps-dgemma-v4b` | −73% | 34–89% | 3,574 | 37 | 16 / 12 / 9 | 3,780 |
+| hosted Jev, good network (reference) | `tps-withhold-v4` | −79% | 51–89% | 3,054 | 39 | 18 / 15 / 6 | 3,027 |
+
+Single-sample reads take the self-hosted server from −44% to −76/−78%, level with hosted Jev's best run (−79%), and its median TTFT fell below the baseline in both runs (1,301 and 1,315 ms against 1,841 and 1,461 ms). The 0.7 floor did not carry over: it condensed more results (15–16 against 11–12) but the generator repeated more calls to get complete output (37–40 tool calls against 32–34) and wrote more, and one run of six saved nothing, so the totals were lower and noisier (−56%, −73%). The harness's extra ideal decision is real but small; the end-to-end cost of a marginal condensation the generator then re-requests outweighs it here. The floor stays at 0.8.
+
+**Adopted configuration for the self-hosted server:** `TYPESAFE_REQUEST_EXTENSIONS='{"samples":1}'`, `TYPESAFE_CONFIDENCE` unset. Limits: two benchmark runs per configuration on a shared hosted generator whose own variance spans 67–89% per run with identical settings; the fixture has one partial-answer case and no adversarial passages; the `samples` field is specific to the PR 57250 interposer. Wall time remains higher than the baseline with every configuration for the reasons recorded above, and a prefill-bound local generator is still unmeasured.
 
 ### jeff (GLiFormer) as the judgment server: negative result
 
