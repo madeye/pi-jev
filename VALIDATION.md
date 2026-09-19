@@ -172,6 +172,43 @@ A direct probe with the extension's exact ranking question explains the gap. On 
 
 Deployment notes: the engine holds ~24 GB beside Qwen's 55 GB, leaving about 4 GB of unused host RAM on the 121 GB unified box; the first start failed inside the NVIDIA driver with `NV_ERR_NO_MEMORY` until the page cache left by the 19 GB download was dropped. The interposer is an example script with no authentication, published only on the LAN. The PR is unmerged, so the overlay pins one revision. Reports: `results/tps-dgemma-v1-benchmark.json`, `results/tps-dgemma-v2-benchmark.json`.
 
+### DiffusionGemma vs hosted Jev: token and context saving
+
+The question that matters for this extension is how much generator context each judgment server removes, so this compares the two on that alone. Same fixture, same `bash`-only prompts, same generator (`opencode-go/deepseek-v4.1-flash`), `--jev-tools` on for `focus`. Each `focus` run is paired with the `bash` baseline run of the same task and repetition. "Hosted Jev" is `results/tps-withhold-v4-benchmark.json`, the run where the network cooperated (33 of 39 judgments answered); "DiffusionGemma" is `results/tps-dgemma-v2-benchmark.json`, the warm run on the Spark (32 of 32 answered, none timed out). All 24 answers in both were correct, so no saving below was bought with a wrong answer.
+
+The fixture has five files of about 15 KB each. `incident-policy` needs one fact from each of three files (`security.md`, `deploy.md`, `retention.md`) with two distractors; `rate-limits` needs one fact from each of two files (`api.md`, `internal.md`) with three distractors. Every file carries an archived value next to the current one.
+
+**Input tokens per run** (all requests in the run, cumulative context the generator prefilled):
+
+| Task, repetition | `bash` baseline | Hosted Jev | saving | DiffusionGemma | saving |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| incident-policy 0 | 15,649 | 2,116 | −86% | 10,084 | −36% |
+| incident-policy 1 | 15,653 / 15,610 | 2,213 | −86% | 10,094 | −35% |
+| incident-policy 2 | 15,649 / 15,647 | 2,143 | −86% | 10,056 | −36% |
+| rate-limits 0 | 15,675 / 15,709 | 1,698 | −89% | 4,467 | −72% |
+| rate-limits 1 | 6,881 / 15,633 | 1,717 | −75% | 13,101 | −16% |
+| rate-limits 2 | 15,633 / 15,758 | 7,725 | −51% | 4,570 | −71% |
+| **Total** | **85,140 / 94,006** | **17,612** | **−79%** | **52,372** | **−44%** |
+
+(Where two baselines are shown, the first belongs to the hosted-Jev run and the second to the DiffusionGemma run; in hosted-Jev rate-limits 1 the baseline model itself read fewer files.)
+
+**Context per generator request:**
+
+| | `bash` baseline | Hosted Jev `focus` | DiffusionGemma `focus` |
+| --- | ---: | ---: | ---: |
+| Median input tokens per request | 5,884 / 5,955 | 790 | 933 |
+| p95 input tokens per request | 14,721 / 14,717 | 3,054 | 11,949 |
+| Tool results condensed / withheld / passed through | — | 18 / 15 / 6 | 5 / 12 / 15 |
+| Output tokens, total | 1,748 / 2,111 | 3,027 | 2,602 |
+
+**Reading.** When a judgment is confident, both servers produce the same shape of saving: a relevant 15 KB file collapses to about 570 bytes of excerpt and an unrelated one to a two-line notice, and a run that judged every file that way used 1,700–2,200 input tokens against 15,600 (−86% to −89%, seen with both servers). The difference is how often that happens. Hosted Jev condensed 18 results and passed only 6 through unchanged; DiffusionGemma condensed 5 and passed 15 through. Every passed-through result costs the full file, which is why DiffusionGemma's p95 request context (11,949 tokens) stays near the baseline while hosted Jev's (3,054) does not.
+
+The gap is concentrated on the three-fact task. On `rate-limits`, DiffusionGemma withheld all three distractors in two of three runs and saved 71–72%, close to hosted Jev's 75–89%. On `incident-policy` it passed three of five files through in every run and saved 35–36% against hosted Jev's 86%. Two causes were visible in the direct probe recorded above: the model is confident on clearly relevant and clearly irrelevant passages but lands just under the 0.8 confidence bar on archived material, and it splits its probability on passages that answer only part of a multi-part question. Since withholding requires every shortlisted excerpt to be confidently unrelated, and condensing requires confident direct evidence, an uncertain distractor or a hedged partial answer sends the whole file through unchanged. The interposer reports the top label's probability as `confidence`, which is not the calibrated quantity the thresholds were tuned on.
+
+`focus` raises output tokens over the baseline with either server (notices, re-reads after a withheld result), by 900–1,300 tokens per six runs; that is small next to the input saving but not zero.
+
+**What this does and does not show.** With the network cooperating, hosted Jev saves roughly twice as much context as DiffusionGemma with the current thresholds (−79% vs −44%). Without it, hosted Jev saved 26% on the same code the same day (`tps-withhold-v3`), below DiffusionGemma's worst run, and DiffusionGemma's saving does not depend on the network at all. Whether re-tuning the thresholds for the local model's confidence signal, or asking it for more samples, recovers the −79% is the open experiment; the ceiling when every judgment is confident is the same for both.
+
 ### jeff (GLiFormer) as the judgment server: negative result
 
 [logan-markewich/jeff](https://github.com/logan-markewich/jeff) wraps the 400M-parameter GLiFormer encoder in the same wire format. Run on this Mac's MPS with the pinned model name added to its aliases (`results/tps-jeff-v1-benchmark.json`), it produced 0 usable judgments out of 28: only four requests completed at all, because the extension's real payloads (twelve passages from a 15 KB file) queued past the 3-second deadline, so every result passed through and the token saving was zero. Speed aside, the judgments were noise for this task. With the extension's exact batched question on five hand-picked passages, the passage holding the direct answer scored lowest (0.41) and the archived value highest (0.73), every confidence between 0.07 and 0.20; one passage per request with plain-text state still scored the answer 0.67 at confidence 0.20 and preferred the archived passage. This matches its author's benchmarks, where it trails jev most on reading comprehension (BoolQ 0.75 vs 0.95 AUROC). It is built for flat classification of short text, not for ranking passages against a question, and is not a candidate here.
