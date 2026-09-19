@@ -7,7 +7,19 @@ const connections = () => {
   dispatcher ??= new Agent({ keepAliveTimeout: 30_000 });
   return dispatcher;
 };
-const origin = "https://api.typesafe.ai/";
+const defaultOrigin = "https://api.typesafe.ai/";
+
+/** Normalised origin of a Jev-compatible server; `undefined` unless the URL is http(s). */
+export function jevOrigin(url?: string): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return undefined;
+    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}/`;
+  } catch {
+    return undefined;
+  }
+}
 
 export type Question =
   | { type: "choice"; instructions: string; criteria: Record<string, string> }
@@ -87,16 +99,28 @@ export class JevClient {
       timeoutMs?: number;
       cacheTtlMs?: number;
       cooldownMs?: number;
+      /** A self-hosted server speaking the same API; the hosted service by default. */
+      baseUrl?: string;
       fetch?: typeof fetch;
     } = {},
   ) {}
+
+  private get origin(): string {
+    return jevOrigin(this.options.baseUrl) ?? defaultOrigin;
+  }
+
+  /** A self-hosted server may not need a key; the hosted service always does. */
+  get configured(): boolean {
+    return Boolean(this.options.apiKey) || jevOrigin(this.options.baseUrl) !== undefined;
+  }
 
   /**
    * Open the connection ahead of a likely request so that its deadline is not spent on the
    * TLS handshake. Sends no credentials or state; failures are ignored and never counted.
    */
   async warm(signal?: AbortSignal): Promise<void> {
-    if (!this.options.apiKey || performance.now() < this.cooldownUntil) return;
+    if (!this.configured || performance.now() < this.cooldownUntil) return;
+    const origin = this.origin;
     const timeout = AbortSignal.timeout(3000);
     const request = {
       method: "HEAD",
@@ -125,7 +149,7 @@ export class JevClient {
       reason,
       elapsedMs: performance.now() - start,
     });
-    if (!this.options.apiKey) return fail("missing-api-key");
+    if (!this.configured) return fail("missing-api-key");
     if (signal?.aborted) return fail("cancelled");
     const body = JSON.stringify({ model: this.options.model ?? "jev-1.13.0", state, questions });
     // Conservative byte bound, well below the documented request token limits even for CJK.
@@ -151,10 +175,11 @@ export class JevClient {
     const timeout = AbortSignal.timeout(timeoutMs ?? this.options.timeoutMs ?? 1500);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
     try {
+      const endpoint = `${this.origin}v1/systemone`;
       const request = {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${this.options.apiKey}`,
+          ...(this.options.apiKey ? { Authorization: `Bearer ${this.options.apiKey}` } : {}),
           "Content-Type": "application/json",
         },
         body,
@@ -162,8 +187,8 @@ export class JevClient {
         redirect: "error" as const,
       };
       const response = this.options.fetch
-        ? await this.options.fetch("https://api.typesafe.ai/v1/systemone", request)
-        : await undiciFetch("https://api.typesafe.ai/v1/systemone", {
+        ? await this.options.fetch(endpoint, request)
+        : await undiciFetch(endpoint, {
             ...request,
             dispatcher: connections(),
           });

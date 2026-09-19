@@ -47,6 +47,42 @@ test("sends one request with the documented endpoint, pinned model, and only sup
   assert.equal(calls, 1);
 });
 
+test("a self-hosted base URL replaces the origin, needs no key, and rejects other schemes", async () => {
+  const seen: string[] = [];
+  const client = new JevClient({
+    baseUrl: "http://192.168.0.4:8011/",
+    fetch: async (url, options) => {
+      seen.push(`${options?.method} ${url}`);
+      assert.equal(new Headers(options?.headers).has("authorization"), false);
+      return options?.method === "HEAD"
+        ? new Response(null)
+        : Response.json(response({ skill: choice() }));
+    },
+  });
+  assert.equal(client.configured, true);
+  await client.warm();
+  const outcome = await client.evaluate({ request: "x" }, question);
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(seen, [
+    "HEAD http://192.168.0.4:8011/",
+    "POST http://192.168.0.4:8011/v1/systemone",
+  ]);
+  for (const baseUrl of ["ftp://host/", "not a url", ""]) {
+    const bad = new JevClient({ baseUrl, fetch: async () => assert.fail("unexpected call") });
+    assert.equal(bad.configured, false);
+    assert.equal((await bad.evaluate({}, question)).ok, false);
+  }
+  const prefixed = new JevClient({
+    apiKey: "k",
+    baseUrl: "https://example.test/jev//",
+    fetch: async (url) => {
+      assert.equal(url, "https://example.test/jev/v1/systemone");
+      return Response.json(response({ skill: choice() }));
+    },
+  });
+  assert.equal((await prefixed.evaluate({}, question)).ok, true);
+});
+
 test("uncertain and no-match choices do not change the prompt", async () => {
   for (const answer of [choice("s0", 0.4), choice("none")]) {
     assert.equal(

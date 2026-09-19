@@ -148,6 +148,34 @@ Same paired benchmark, hosted `opencode-go/deepseek-v4.1-flash` generator, three
 
 In the three runs where every Jev call returned, a run used 1,734–2,178 input tokens against 15,635–15,686 for the baseline (**−86% to −89%**): relevant files were condensed to about 570 bytes and unrelated files withheld. The overall figure is lower because two runs had all five parallel Jev calls hit the 3-second deadline, passing everything through and adding the wait, and in one run the model repeated three calls to get complete output. An earlier run before the warm-up (`results/tps-withhold-v1-benchmark.json`) lost three of four runs the same way; a direct probe confirmed the network path to Jev alternates between ~0.7 s responses and stretches where every request times out. **Wall time was again worse**, for the same reasons as above plus those timeouts. The token saving is real when Jev is reachable; the latency cost is unresolved, and a prefill-bound local model remains unmeasured.
 
+### Hosted Jev reachability, reruns of 2026-09-19
+
+Two reruns of the same paired benchmark, same code, differed only in whether the hosted service answered. With 22 of 30 calls hitting the 3-second deadline (`results/tps-withhold-v3-benchmark.json`) the run saved 26% of input tokens; with 33 of 39 answered (`results/tps-withhold-v4-benchmark.json`) it saved 79%, with a median TTFT below the baseline for the first time (1,303 ms vs 1,851 ms). Direct probes of the endpoint between the runs showed TLS handshakes of 1.1 s, 4.9 s, 7.6 s and one outright timeout. The network path, not the ranking, decides the outcome.
+
+### Self-hosted DiffusionGemma as the judgment server
+
+To take the network out, [vllm-project/vllm#57250](https://github.com/vllm-project/vllm/pull/57250) was deployed on the LAN DGX Spark (GB10): its structured-read patch overlaid on the arm64 nightly image at commit `a8d1aa9c` (eight commits past the PR's merge base, none touching the patched files), `nvidia/diffusiongemma-26B-A4B-it-NVFP4` with a 32-row canvas next to the running Qwen engine, and the PR's example interposer serving the Jev `/v1/systemone` contract on port 8011. The client reaches it through `TYPESAFE_BASE_URL`; on this Mac that has to be an SSH tunnel to loopback because macOS local-network privacy blocks Homebrew Node, Python and curl from the Spark's ports while Apple's own binaries connect. The interposer maps the extension's existing choice and score questions to single-letter slots itself, and its responses pass the client's validator unchanged.
+
+Same paired benchmark, hosted `opencode-go/deepseek-v4.1-flash` generator, three repetitions, all answers correct:
+
+| Measurement (2 tasks, 3 repetitions) | `bash` | `focus`, cold server (`tps-dgemma-v1`) | `focus`, warm server (`tps-dgemma-v2`) | `focus`, hosted Jev v4 |
+| --- | ---: | ---: | ---: | ---: |
+| Tool executions | 30 | 31 | 32 | 39 |
+| Results condensed / withheld / unchanged | — | 4 / 13 / 14 | 5 / 12 / 15 | 18 / 15 / 6 |
+| Total input tokens | 93,915–94,006 | 46,670 (−50%) | 52,372 (−44%) | 17,612 (−79%) |
+| Median end-to-end wall time | 5.6–6.5 s | 8.0 s | 8.9 s | 9.2 s |
+| Judgment latency (interposer log) | — | 7.7–7.9 s first batch, then 0.4–1.7 s | median ~0.7 s | 0.4–1.1 s when answered, else timeout |
+
+**Latency is solved; decisiveness is not.** Once warm, every judgment returned well inside the 3-second deadline: no timeouts in the warm run, against 6 to 22 per run for the hosted service. The cold first batch took 7.8 s because Triton JIT-compiled the logprob kernels on first inference (`_fill_logprob_token_ids_kernel`, `_topk_log_softmax_kernel`), a one-time cost per engine process that `warm.sh` on the Spark now pays at start-up. But the local model condensed far fewer results (5 versus 18) and passed 15 through unchanged, so the token saving was 44% against 79%.
+
+A direct probe with the extension's exact ranking question explains the gap. On five hand-picked passages for the rate-limits query, the current public-limit passage scored 1.99 at confidence 0.99 and the padding note 0.05 at 0.96, both decisive. But the archived-limit passage landed at 0.76 confidence on "unrelated", just under the 0.8 withhold bar, and the internal-limit passage, which answers the second half of the question, was split 0.31 / 0.46 / 0.23 across the three levels. The interposer reports the top label's probability as `confidence`, a different quantity from the hosted service's calibrated estimate, and the thresholds in `src/decisions.ts` and `src/focus.ts` (0.8 confidence, score 1.5 for direct evidence, score below 0.5 to withhold) were tuned on the hosted signal. Whether re-tuning them for this model, or the interposer's `samples`/`think` options, closes the gap is unmeasured. Multi-part questions are a weak spot worth a dedicated case.
+
+Deployment notes: the engine holds ~24 GB beside Qwen's 55 GB, leaving about 4 GB of unused host RAM on the 121 GB unified box; the first start failed inside the NVIDIA driver with `NV_ERR_NO_MEMORY` until the page cache left by the 19 GB download was dropped. The interposer is an example script with no authentication, published only on the LAN. The PR is unmerged, so the overlay pins one revision. Reports: `results/tps-dgemma-v1-benchmark.json`, `results/tps-dgemma-v2-benchmark.json`.
+
+### jeff (GLiFormer) as the judgment server: negative result
+
+[logan-markewich/jeff](https://github.com/logan-markewich/jeff) wraps the 400M-parameter GLiFormer encoder in the same wire format. Run on this Mac's MPS with the pinned model name added to its aliases (`results/tps-jeff-v1-benchmark.json`), it produced 0 usable judgments out of 28: only four requests completed at all, because the extension's real payloads (twelve passages from a 15 KB file) queued past the 3-second deadline, so every result passed through and the token saving was zero. Speed aside, the judgments were noise for this task. With the extension's exact batched question on five hand-picked passages, the passage holding the direct answer scored lowest (0.41) and the archived value highest (0.73), every confidence between 0.07 and 0.20; one passage per request with plain-text state still scored the answer 0.67 at confidence 0.20 and preferred the archived passage. This matches its author's benchmarks, where it trails jev most on reading comprehension (BoolQ 0.75 vs 0.95 AUROC). It is built for flat classification of short text, not for ranking passages against a question, and is not a candidate here.
+
 ## Direct lookup: measured speed path
 
 `npm run bench:direct` reused the exact large-document fixture and questions for six fresh Pi processes calling `/jev find`. All six returned the expected source evidence, with **zero assistant messages and zero agent-start events**. Median time including Pi startup was **0.892 s** (range 0.863–2.252 s); five Jev calls succeeded and one timed out into local fallback.

@@ -8,9 +8,12 @@ import { chooseSpeed, fastPayload, supportsSpeedControl } from "./speed.ts";
 
 export default function jevExtension(
   pi: ExtensionAPI,
-  client = new JevClient({ apiKey: process.env.TYPESAFE_API_KEY }),
+  client = new JevClient({
+    apiKey: process.env.TYPESAFE_API_KEY,
+    baseUrl: process.env.TYPESAFE_BASE_URL,
+  }),
 ) {
-  let enabled = Boolean(process.env.TYPESAFE_API_KEY);
+  let enabled = client.configured;
   let epoch = 0;
   let turn = 0;
   let speedModel: string | undefined;
@@ -45,7 +48,7 @@ export default function jevExtension(
     else stats.failures++;
   };
   pi.registerFlag("jev", {
-    description: "Enable hosted Jev assistance (requires TYPESAFE_API_KEY)",
+    description: "Enable Jev assistance (requires TYPESAFE_API_KEY or TYPESAFE_BASE_URL)",
     type: "boolean",
     default: enabled,
   });
@@ -71,7 +74,7 @@ export default function jevExtension(
     request = "";
     focused.clear();
     speedModel = undefined;
-    enabled = Boolean(pi.getFlag("jev")) && Boolean(process.env.TYPESAFE_API_KEY);
+    enabled = Boolean(pi.getFlag("jev")) && client.configured;
     ctx.ui.setStatus("jev", enabled ? "Jev: on" : "Jev: off");
   });
   pi.on("session_shutdown", () => {
@@ -130,7 +133,7 @@ export default function jevExtension(
         return;
       }
       if (command === "on" || command === "off") {
-        enabled = command === "on" && Boolean(process.env.TYPESAFE_API_KEY);
+        enabled = command === "on" && client.configured;
         epoch++;
         speedModel = undefined;
         ctx.ui.setStatus("jev", enabled ? "Jev: on" : "Jev: off");
@@ -144,7 +147,7 @@ export default function jevExtension(
       ctx.ui.notify(
         JSON.stringify({
           enabled,
-          keyConfigured: Boolean(process.env.TYPESAFE_API_KEY),
+          keyConfigured: client.configured,
           ...stats,
           elapsedMs: Math.round(stats.elapsedMs),
         }),

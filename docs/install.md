@@ -122,6 +122,18 @@ shell profile so every Pi session inherits it:
 export TYPESAFE_API_KEY="..."
 ```
 
+## Point at a self-hosted server
+
+`TYPESAFE_BASE_URL` replaces the hosted origin with any server that speaks the same
+`POST /v1/systemone` contract, such as the DiffusionGemma structured-read server from
+[vllm-project/vllm#57250](https://github.com/vllm-project/vllm/pull/57250). A key is then
+optional; if `TYPESAFE_API_KEY` is also set it is still sent as a bearer token. Only `http`
+and `https` URLs are accepted, and a path prefix is kept:
+
+```sh
+export TYPESAFE_BASE_URL="http://192.168.0.4:8011"
+```
+
 ## Verify, update, and remove
 
 ```sh
