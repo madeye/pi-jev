@@ -1,10 +1,10 @@
-import { EnvHttpProxyAgent, fetch as proxyFetch } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 
 // Scoped to Jev requests; never changes Pi's global networking or local model routing.
-let dispatcher: EnvHttpProxyAgent | undefined;
+let dispatcher: Agent | undefined;
 // Idle connections outlive a model turn, so a warmed connection is still open for tool results.
 const connections = () => {
-  dispatcher ??= new EnvHttpProxyAgent({ keepAliveTimeout: 30_000 });
+  dispatcher ??= new Agent({ keepAliveTimeout: 30_000 });
   return dispatcher;
 };
 const origin = "https://api.typesafe.ai/";
@@ -106,7 +106,7 @@ export class JevClient {
     try {
       const response = this.options.fetch
         ? await this.options.fetch(origin, request)
-        : await proxyFetch(origin, { ...request, dispatcher: connections() });
+        : await undiciFetch(origin, { ...request, dispatcher: connections() });
       await response.body?.cancel();
     } catch {
       /* The real request reports its own failure. */
@@ -163,7 +163,7 @@ export class JevClient {
       };
       const response = this.options.fetch
         ? await this.options.fetch("https://api.typesafe.ai/v1/systemone", request)
-        : await proxyFetch("https://api.typesafe.ai/v1/systemone", {
+        : await undiciFetch("https://api.typesafe.ai/v1/systemone", {
             ...request,
             dispatcher: connections(),
           });

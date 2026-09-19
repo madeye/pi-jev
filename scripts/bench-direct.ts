@@ -4,12 +4,11 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { benchmarkEnvironment } from "./environment.ts";
 
 // Reuse the exact fixture and questions from the completed paired retrieval experiment.
 const previous = JSON.parse(await readFile("results/retrieval-large-benchmark.json", "utf8"));
 const run = promisify(execFile);
-const env = benchmarkEnvironment();
+const env = { ...process.env, PI_TELEMETRY: "0" };
 const extension = resolve("src/index.ts");
 const cwd = await mkdtemp(join(tmpdir(), "pi-jev-direct-"));
 const rows = [];

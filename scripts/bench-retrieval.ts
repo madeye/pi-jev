@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { benchmarkEnvironment } from "./environment.ts";
 
 // Freeze cases before running. Compare context reduction separately from Jev's contribution.
 const cases = [
@@ -32,7 +31,7 @@ const sections = [
   "# Support\nSupport tickets should include a reproducible example and the affected version.",
 ];
 const model = process.env.PI_BENCH_MODEL ?? "local-qwen/qwen3.8-27b";
-const baseEnv = benchmarkEnvironment();
+const baseEnv = { ...process.env, PI_TELEMETRY: "0" };
 const padding = Number(process.env.PI_BENCH_PADDING ?? 0);
 if (!Number.isInteger(padding) || padding < 0 || padding > 200) throw new Error("Invalid padding");
 for (let i = 0; i < padding; i++) {
