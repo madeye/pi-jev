@@ -101,6 +101,8 @@ export class JevClient {
       cooldownMs?: number;
       /** A self-hosted server speaking the same API; the hosted service by default. */
       baseUrl?: string;
+      /** Extra top-level request fields a self-hosted server understands; never override the core ones. */
+      extensions?: Record<string, unknown>;
       fetch?: typeof fetch;
     } = {},
   ) {}
@@ -151,7 +153,12 @@ export class JevClient {
     });
     if (!this.configured) return fail("missing-api-key");
     if (signal?.aborted) return fail("cancelled");
-    const body = JSON.stringify({ model: this.options.model ?? "jev-1.13.0", state, questions });
+    const body = JSON.stringify({
+      ...this.options.extensions,
+      model: this.options.model ?? "jev-1.13.0",
+      state,
+      questions,
+    });
     // Conservative byte bound, well below the documented request token limits even for CJK.
     if (Buffer.byteLength(body) > 24_000) return fail("request-too-large");
     const cached = this.cache.get(body);
