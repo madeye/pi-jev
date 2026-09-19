@@ -7,7 +7,6 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { benchmarkEnvironment } from "../scripts/environment.ts";
 
 test("installed Pi forwards adaptive thinking control to an actual HTTP provider", {
   timeout: 30_000,
@@ -97,18 +96,12 @@ export default (pi) => jev(pi, new JevClient({ apiKey: 'test', fetch: async () =
           cwd,
           timeout: 12_000,
           maxBuffer: 1_000_000,
-          env: benchmarkEnvironment({
+          env: {
             ...process.env,
             PI_CODING_AGENT_DIR: agentDir,
             TYPESAFE_API_KEY: "test",
             PI_TELEMETRY: "0",
-            HTTP_PROXY: "http://127.0.0.1:9",
-            HTTPS_PROXY: "http://127.0.0.1:9",
-            http_proxy: "http://127.0.0.1:9",
-            https_proxy: "http://127.0.0.1:9",
-            NO_PROXY: "",
-            no_proxy: "",
-          }),
+          },
         },
       );
       execution.child.stdin?.end();

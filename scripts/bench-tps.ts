@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { aggregate, type RequestSample, type RunSample } from "./bench-stats.ts";
-import { benchmarkEnvironment } from "./environment.ts";
 
 /**
  * Throughput benchmark: does Jev improve Pi's tokens-per-second by compressing
@@ -69,7 +68,7 @@ if (modes.some(hosted) && !process.env.TYPESAFE_API_KEY)
     "Set TYPESAFE_API_KEY for the jev and focus modes, use PI_BENCH_MODES=read,local, or run bench:retrieval for keyless retrieval",
   );
 
-const baseEnv = benchmarkEnvironment();
+const baseEnv = { ...process.env, PI_TELEMETRY: "0" };
 const fileNames = Object.keys(files);
 const rows: Record<string, unknown>[] = [];
 const samplesByMode: Record<string, RunSample[]> = Object.fromEntries(

@@ -5,7 +5,7 @@ Environment: macOS on Apple Silicon, Node 25.9.0, installed Pi 0.85.1. Local gen
 ## Automated checks
 
 - `npm run lint`: TypeScript strict checking and Biome passed.
-- `npm test`: 45 tests passed, covering the original request/retrieval/cache behavior plus adaptive thinking, explicit parameter preservation, local endpoint selection, turn/model lifecycle, direct command delivery, built-in tool output focusing, the benchmark launcher environment, and actual Pi-to-HTTP integration against a mock provider.
+- `npm test`: 42 tests passed, covering the original request/retrieval/cache behavior plus adaptive thinking, explicit parameter preservation, local endpoint selection, turn/model lifecycle, direct command delivery, built-in tool output focusing, and actual Pi-to-HTTP integration against a mock provider.
 - `npm pack --dry-run`: extension sources and package metadata included; ignored results and credentials excluded.
 
 ## Live hosted checks
