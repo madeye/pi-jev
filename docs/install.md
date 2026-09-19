@@ -134,6 +134,18 @@ and `https` URLs are accepted, and a path prefix is kept:
 export TYPESAFE_BASE_URL="http://192.168.0.4:8011"
 ```
 
+Two further settings exist for tuning a self-hosted server; both are read at load time and
+reported by `/jev status`:
+
+- `TYPESAFE_REQUEST_EXTENSIONS`: a JSON object of extra top-level request fields the server
+  understands, sent with every judgment. The core fields (`model`, `state`, `questions`) cannot
+  be overridden. For the DiffusionGemma structured-read server, `{"samples":1}` asks for a
+  single denoise read instead of its adaptive re-sampling; see VALIDATION.md for the measured
+  effect. The hosted service needs none.
+- `TYPESAFE_CONFIDENCE`: the confidence a judgment needs before it changes anything (skill
+  suggestions, condensed excerpts, withheld output), from 0.5 to 1. The default 0.8 was tuned on
+  the hosted service's calibrated confidence. Values outside the range are ignored.
+
 ## Verify, update, and remove
 
 ```sh

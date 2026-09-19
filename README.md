@@ -28,7 +28,8 @@ Verify and manage the install with `pi list`, `pi config` (enable/disable resour
 `pi update --extensions`, and `pi remove <source>`. Inside a session, `/jev status`
 shows whether the extension is active. The hosted key is read from the environment at
 load time: `export TYPESAFE_API_KEY=...`. `TYPESAFE_BASE_URL` points the same requests at a
-self-hosted Jev-compatible server instead (see [docs/install.md](docs/install.md)). Without
+self-hosted Jev-compatible server instead, with `TYPESAFE_REQUEST_EXTENSIONS` and
+`TYPESAFE_CONFIDENCE` for tuning it (see [docs/install.md](docs/install.md)). Without
 either, `jev_search` still works using local retrieval, and `--jev-speed`/`--jev-skills`/`--jev-tools` stay disabled.
 
 ## Run

@@ -39,7 +39,7 @@ export async function suggestSkill(
   );
   const answer = outcome.ok ? outcome.result.answers.skill : undefined;
   const selected =
-    answer?.type === "choice" && answer.confidence >= 0.8 && answer.choice !== "none"
+    answer?.type === "choice" && confident(answer.confidence) && answer.choice !== "none"
       ? eligible[Number(answer.choice.slice(1))]
       : undefined;
   return { selected, outcome };
@@ -53,8 +53,22 @@ export interface RankedPassage extends Passage {
   score?: number;
   confidence?: number;
 }
+/**
+ * Minimum confidence for a judgment to change anything: skill suggestions, direct evidence,
+ * and withheld output. 0.8 was tuned on the hosted service's calibrated confidence; a
+ * self-hosted server reporting a different quantity may need another floor (see VALIDATION).
+ */
+let confidenceFloor = 0.8;
+export const confident = (confidence: number | undefined) => (confidence ?? 0) >= confidenceFloor;
+/** Set the floor from configuration; out-of-range or non-numeric values keep the default. */
+export function setConfidenceFloor(value: unknown): number {
+  const floor = typeof value === "string" ? Number(value) : value;
+  if (typeof floor === "number" && Number.isFinite(floor) && floor >= 0.5 && floor <= 1)
+    confidenceFloor = floor;
+  return confidenceFloor;
+}
 export const isDirectEvidence = (p: RankedPassage) =>
-  (p.confidence ?? 0) >= 0.8 && (p.score ?? 0) >= 1.5;
+  confident(p.confidence) && (p.score ?? 0) >= 1.5;
 export async function rankPassages(
   client: JevClient,
   query: string,

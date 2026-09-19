@@ -1,18 +1,33 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { rankPassages, suggestSkill } from "./decisions.ts";
+import { rankPassages, setConfidenceFloor, suggestSkill } from "./decisions.ts";
 import { focusableTools, focusOutput, readOnlyCommand } from "./focus.ts";
 import { JevClient, type Outcome } from "./jev.ts";
 import { parseFindArguments, searchFiles } from "./retrieval.ts";
 import { chooseSpeed, fastPayload, supportsSpeedControl } from "./speed.ts";
+
+/** Parse a JSON object of extra request fields; anything else means none. */
+export function requestExtensions(value?: string): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export default function jevExtension(
   pi: ExtensionAPI,
   client = new JevClient({
     apiKey: process.env.TYPESAFE_API_KEY,
     baseUrl: process.env.TYPESAFE_BASE_URL,
+    extensions: requestExtensions(process.env.TYPESAFE_REQUEST_EXTENSIONS),
   }),
 ) {
+  const confidenceFloor = setConfidenceFloor(process.env.TYPESAFE_CONFIDENCE);
   let enabled = client.configured;
   let epoch = 0;
   let turn = 0;
@@ -148,6 +163,7 @@ export default function jevExtension(
         JSON.stringify({
           enabled,
           keyConfigured: client.configured,
+          confidenceFloor,
           ...stats,
           elapsedMs: Math.round(stats.elapsedMs),
         }),

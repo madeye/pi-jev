@@ -1,4 +1,4 @@
-import { isDirectEvidence, type RankedPassage, rankPassages } from "./decisions.ts";
+import { confident, isDirectEvidence, type RankedPassage, rankPassages } from "./decisions.ts";
 import type { JevClient, Outcome } from "./jev.ts";
 import { chunkLines, words } from "./retrieval.ts";
 
@@ -13,7 +13,7 @@ export const readOnlyCommand = (command: string) =>
   command.split(/\|\||&&|[|;\n]/).every((part) => readOnly.test(part.trim()));
 
 const confidentlyUnrelated = (p: RankedPassage) =>
-  p.score !== undefined && p.score < 0.5 && (p.confidence ?? 0) >= 0.8;
+  p.score !== undefined && p.score < 0.5 && confident(p.confidence);
 
 /**
  * Condense a large tool output to the excerpts Jev confidently judges as direct evidence.

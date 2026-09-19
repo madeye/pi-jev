@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { rankPassages, suggestSkill } from "../src/decisions.ts";
+import {
+  isDirectEvidence,
+  rankPassages,
+  setConfidenceFloor,
+  suggestSkill,
+} from "../src/decisions.ts";
+import { requestExtensions } from "../src/index.ts";
 import { JevClient, type Question } from "../src/jev.ts";
 
 const question: Record<string, Question> = {
@@ -81,6 +87,43 @@ test("a self-hosted base URL replaces the origin, needs no key, and rejects othe
     },
   });
   assert.equal((await prefixed.evaluate({}, question)).ok, true);
+});
+
+test("request extensions ride along without overriding the core fields", async () => {
+  const client = new JevClient({
+    apiKey: "k",
+    extensions: { samples: 1, model: "other", state: "x", questions: {} },
+    fetch: async (_url, options) => {
+      const body = JSON.parse(String(options?.body));
+      assert.equal(body.samples, 1);
+      assert.equal(body.model, "jev-1.13.0");
+      assert.deepEqual(body.state, { request: "r" });
+      assert.deepEqual(Object.keys(body.questions), ["skill"]);
+      return Response.json(response({ skill: choice() }));
+    },
+  });
+  assert.equal((await client.evaluate({ request: "r" }, question)).ok, true);
+  for (const value of ['{"samples":1}', "[1]", "null", "nonsense", "", undefined]) {
+    const parsed = requestExtensions(value);
+    assert.deepEqual(parsed, value === '{"samples":1}' ? { samples: 1 } : undefined);
+  }
+});
+
+test("the confidence floor is configurable within bounds and gates evidence and skills", async () => {
+  try {
+    assert.equal(setConfidenceFloor("0.6"), 0.6);
+    assert.equal(isDirectEvidence({ id: "p", text: "", score: 1.8, confidence: 0.65 }), true);
+    for (const bad of ["0.4", "1.5", "abc", undefined, null])
+      assert.equal(setConfidenceFloor(bad), 0.6);
+    const client = mock(response({ skill: choice("s0", 0.7) }));
+    assert.equal(
+      (await suggestSkill(client, "Write TypeScript", [skill])).selected?.name,
+      "typescript",
+    );
+  } finally {
+    setConfidenceFloor(0.8);
+  }
+  assert.equal(isDirectEvidence({ id: "p", text: "", score: 1.8, confidence: 0.65 }), false);
 });
 
 test("uncertain and no-match choices do not change the prompt", async () => {
