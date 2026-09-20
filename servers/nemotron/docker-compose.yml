@@ -1,0 +1,57 @@
+# Nemotron-Labs-Diffusion-8B as a Jev judgment server, beside the DiffusionGemma and Qwen stacks.
+# Stock vLLM has no NemotronLabsDiffusionModel; convert.py renames the checkpoint into the plain
+# Ministral-3 causal LM its AR mode is, and reader.py turns next-token logprobs into judgments.
+#
+#   docker run --rm --network host --user 1000:1000 --entrypoint python3 -e HOME=/tmp \
+#     -e HF_HOME=/hfcache -v ~/.cache/huggingface:/hfcache -v $PWD:/work <image> /work/convert.py /work/model
+#
+# Same unified-memory gotcha as dgemma: drop the page cache before `up` if CUDA init fails.
+services:
+  vllm:
+    image: vllm/vllm-openai:nightly-a8d1aa9c99b8698a2a78b611b7a10c30e6b3995b
+    runtime: nvidia
+    entrypoint: ["vllm", "serve"]
+    command:
+      - /model
+      - --served-model-name=nemotron
+      - --host=0.0.0.0
+      - --port=8000
+      - --quantization=fp8          # 17 GB of BF16 does not fit beside the other two engines
+      - --enable-prefix-caching
+      - --async-scheduling
+      - --attention-backend=TRITON_ATTN
+      - --max-num-seqs=32
+      - --max-model-len=8192
+      - --gpu-memory-utilization=0.15
+      - --kv-cache-memory-bytes=3221225472
+    environment:
+      MAX_JOBS: "4"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      HF_HUB_OFFLINE: "1"
+    volumes:
+      - ./model:/model:ro
+      - nemotron-cache:/root/.cache
+    shm_size: "8gb"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40m
+    stop_grace_period: 60s
+    restart: unless-stopped
+  reader:
+    image: vllm/vllm-openai:nightly-a8d1aa9c99b8698a2a78b611b7a10c30e6b3995b
+    entrypoint: ["python3", "/app/reader.py"]
+    command: ["--upstream=http://vllm:8000", "--model=nemotron", "--host=0.0.0.0", "--port=8012"]
+    depends_on:
+      vllm:
+        condition: service_healthy
+    volumes:
+      - ./reader.py:/app/reader.py:ro
+    ports:
+      - "8012:8012"
+    restart: unless-stopped
+volumes:
+  nemotron-cache:

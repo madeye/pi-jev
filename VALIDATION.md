@@ -10,7 +10,7 @@ Environment: macOS on Apple Silicon, Node 25.9.0, installed Pi 0.85.1. Generator
 - **End-to-end wall time is not yet better** for model-driven tasks against a fast hosted generator: each judgment adds a round trip, and a shorter prefill did not remove a model turn. A prefill-bound local generator remains unmeasured for `--jev-tools`.
 - **The hosted service's network path decided its results here.** The same code saved 26% or 79% of input tokens on the same day depending only on whether hosted Jev answered within the deadline.
 - **Adopted configuration:** the self-hosted DiffusionGemma server (`TYPESAFE_BASE_URL`) with single-sample reads (`TYPESAFE_REQUEST_EXTENSIONS='{"samples":1}'`) and the default 0.8 confidence floor. It saves 76–78% of input tokens with no timeouts, level with hosted Jev's best run. Details in [Judgment server](#judgment-server-hosted-jev-and-self-hosted-diffusiongemma).
-- **Rejected:** jeff (GLiFormer), which produced no usable judgment on this task; lowering the confidence floor to 0.7; the interposer's `think` and `steps` extensions, which crash the engine.
+- **Rejected:** jeff (GLiFormer), which produced no usable judgment on this task; Nemotron-Labs-Diffusion-8B read through its AR mode, which ranks correctly but saved 38–40% because most judgments missed the deadline under parallel tool calls; lowering the confidence floor to 0.7; the interposer's `think` and `steps` extensions, which crash the engine.
 - Open items are listed at the [end](#open-items).
 
 ## Automated checks
@@ -253,6 +253,38 @@ Single-sample reads take the self-hosted server from −44% to −76/−78%, lev
 ### jeff (GLiFormer): negative result
 
 [logan-markewich/jeff](https://github.com/logan-markewich/jeff) wraps the 400M-parameter GLiFormer encoder in the same wire format. Run on this Mac's MPS with the pinned model name added to its aliases (`results/tps-jeff-v1-benchmark.json`), it produced 0 usable judgments out of 28: only four requests completed at all, because the extension's real payloads (twelve passages from a 15 KB file) queued past the 3-second deadline, so every result passed through and the saving was zero. Speed aside, the judgments were noise for this task. With the extension's exact batched question on five hand-picked passages, the passage holding the direct answer scored lowest (0.41) and the archived value highest (0.73), every confidence between 0.07 and 0.20; one passage per request with plain-text state still scored the answer 0.67 at confidence 0.20 and preferred the archived passage. This matches its author's benchmarks, where it trails jev most on reading comprehension (BoolQ 0.75 against 0.95 AUROC). It is built for flat classification of short text, not for ranking passages against a question.
+
+### Nemotron-Labs-Diffusion-8B: negative result
+
+[nvidia/Nemotron-Labs-Diffusion-8B](https://huggingface.co/nvidia/Nemotron-Labs-Diffusion-8B) (2026-09-20) was tried as a smaller replacement. It is not a drop-in: the DiffusionGemma interposer depends on the PR's seeded-canvas requests, and stock vLLM does not register `NemotronLabsDiffusionModel`. The model's AR mode, though, is by its own code a plain Ministral-3 causal LM under other tensor names, so `servers/nemotron/convert.py` renames the checkpoint (`encoder.*` to `model.*`, `diffusion_head` to `lm_head`) and the unpatched nightly serves it as `Ministral3ForCausalLM` with online FP8 (13.7 GB beside the other two engines, 4 GB of host RAM left). `servers/nemotron/reader.py` speaks `/v1/systemone` over it: one next-token read per question, the answer being the renormalised distribution over option letters, the state first in the prompt so a request's questions share a cached prefix. Its responses pass the client's validator unchanged. The diffusion mode, the model's selling point, is unused: a judgment writes no tokens.
+
+Three prompt findings, from the extension's real 12-passage requests:
+
+- With the chat template's bare non-thinking turn, only 3–26% of the next-token probability fell on option letters; the rest started a sentence, and the renormalised residue was noise (2 of 10 ideal decisions). An explicit one-letter instruction and an `Answer: ` prefix fixed the argmax: every passage of every file then ranked correctly.
+- The model mis-indexes `passages[i]` in a JSON array (an unrelated passage read "related background" at 0.48). Restating the backticked paths' values beside the question fixed that (0.92 "unrelated"). Showing *only* those values, without the state, made every read less decisive.
+- Its probabilities are softer than DiffusionGemma's: "unrelated" sits at 0.6–0.85, around the 0.8 bar rather than above it.
+
+`npm run tune:focus` (`results/tune-focus-nemotron8b-v2-ans.json`), no fact lost in any configuration: floor 0.8 gave 5 of 10 ideal decisions (−48% bytes), 0.7 gave 8 (−77%), 0.6 gave 10 (−96%); DiffusionGemma gives 8 to 10 at 0.8. One judgment alone took 0.66–0.70 s cold and 0.17–0.21 s with the prefix cached, against DiffusionGemma's 0.38–0.42 s.
+
+End to end, same paired benchmark, three repetitions, all 24 answers correct:
+
+| Configuration | Report | Input tokens vs baseline | p95 request context | Judged / fell back | Results withheld | Median wall, `focus` / `bash` |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Nemotron 8B, floor 0.8 | `tps-nemotron8b-v1` | −38% | 9,160 | 14 / 20 | 3 | 9.6 s / 6.1 s |
+| Nemotron 8B, floor 0.6 | `tps-nemotron8b-v2-floor06` | −40% | 11,941 | 15 / 19 | 3 | 9.9 s / 5.1 s |
+| DiffusionGemma, `samples: 1` (reference) | `tps-dgemma-v3` | −78% | 3,575 | 27 / 5 | 15 | 7.2 s / 5.5 s |
+
+**Three servers, one session** (2026-09-20, run back to back, three repetitions each, all 36 answers correct; reports `results/tps-compare-{hosted,dgemma,nemotron8b}-benchmark.json`):
+
+| Server | `focus` input tokens | vs own `bash` baseline | vs the full 93.8k baseline | p95 request context | Judged / fell back | Results withheld | Median TTFT, `focus` / `bash` | Median wall, `focus` / `bash` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Hosted Jev | 24,695 | −74% (93,846) | −74% | 3,559 | 27 / 10 | 13 | 1,387 / 1,842 ms | 10.3 s / 5.3 s |
+| DiffusionGemma, `samples: 1` | 31,793 | −63% (85,439) | −66% | 5,995 | 27 / 7 | 13 | 1,679 / 1,614 ms | 12.3 s / 5.3 s |
+| Nemotron 8B, floor 0.8 | 67,352 | −15% (79,510) | −28% | 14,717 | 10 / 22 | 0 | 1,947 / 1,722 ms | 11.5 s / 6.4 s |
+
+The baselines differ because the generator itself read fewer files in some `bash` runs (one Nemotron-session baseline run used a tenth of the usual tokens, which is the whole of that row's gap between −15% and −28%), so the third column measures every server against the same full-read baseline. Hosted Jev answered on a good network this session and DiffusionGemma landed below its earlier −76/−78% with the same settings, inside the generator variance noted above, and while sharing the GPU with a third loaded engine. Nemotron judged 10 of 32 tool results and withheld none.
+
+The floor made no difference because latency, not calibration, decided the run. Pi issues the five `cat` calls together, so five requests of twelve reads each prefill five cold 15 KB states at once on a dense 8B model: the reader's median judgment took 2.0 s (maximum 3.9 s) before the tunnel, and more than half of the tool results passed through on the 3-second deadline. DiffusionGemma activates 4B parameters and answers a twelve-question request in two passes rather than twelve. The 3B variant would prefill faster but starts from softer judgments still. DiffusionGemma stays the default; the Nemotron stack is stopped and its compose project kept at `~/workspace/nemotron-diffusion` on the Spark.
 
 ## Direct lookup: measured speed path
 
