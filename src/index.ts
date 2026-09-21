@@ -19,14 +19,28 @@ export function requestExtensions(value?: string): Record<string, unknown> | und
   }
 }
 
-export default function jevExtension(
-  pi: ExtensionAPI,
-  client = new JevClient({
-    apiKey: process.env.TYPESAFE_API_KEY,
-    baseUrl: process.env.TYPESAFE_BASE_URL,
-    extensions: requestExtensions(process.env.TYPESAFE_REQUEST_EXTENSIONS),
-  }),
-) {
+/**
+ * The default judgment server: the self-hosted DiffusionGemma structured-read server, reached
+ * on loopback, with the single-sample reads VALIDATION.md adopted.
+ */
+export const defaultServer = { baseUrl: "http://127.0.0.1:8011", extensions: { samples: 1 } };
+export const hostedServer = "https://api.typesafe.ai";
+
+/**
+ * Client options from the environment. An unset TYPESAFE_BASE_URL means the default server and
+ * its request extensions; hosted Jev is TYPESAFE_BASE_URL=https://api.typesafe.ai with a key.
+ * An empty TYPESAFE_BASE_URL means no self-hosted server: hosted with a key, otherwise off.
+ */
+export function serverOptions(env: NodeJS.ProcessEnv = process.env) {
+  const own = requestExtensions(env.TYPESAFE_REQUEST_EXTENSIONS);
+  return {
+    apiKey: env.TYPESAFE_API_KEY,
+    baseUrl: env.TYPESAFE_BASE_URL ?? defaultServer.baseUrl,
+    extensions: own ?? (env.TYPESAFE_BASE_URL === undefined ? defaultServer.extensions : undefined),
+  };
+}
+
+export default function jevExtension(pi: ExtensionAPI, client = new JevClient(serverOptions())) {
   const confidenceFloor = setConfidenceFloor(process.env.TYPESAFE_CONFIDENCE);
   let enabled = client.configured;
   let epoch = 0;
@@ -63,7 +77,8 @@ export default function jevExtension(
     else stats.failures++;
   };
   pi.registerFlag("jev", {
-    description: "Enable Jev assistance (requires TYPESAFE_API_KEY or TYPESAFE_BASE_URL)",
+    description:
+      "Enable Jev assistance (the DiffusionGemma server at 127.0.0.1:8011 unless TYPESAFE_BASE_URL is set)",
     type: "boolean",
     default: enabled,
   });
@@ -163,6 +178,7 @@ export default function jevExtension(
         JSON.stringify({
           enabled,
           keyConfigured: client.configured,
+          server: serverOptions().baseUrl || hostedServer,
           confidenceFloor,
           ...stats,
           elapsedMs: Math.round(stats.elapsedMs),

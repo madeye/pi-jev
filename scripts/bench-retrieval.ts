@@ -57,7 +57,11 @@ try {
       const offset = (repeat + index) % modes.length;
       for (const mode of [...modes.slice(offset), ...modes.slice(0, offset)]) {
         const env: NodeJS.ProcessEnv = { ...baseEnv };
-        if (mode !== "jev") delete env.TYPESAFE_API_KEY;
+        if (mode !== "jev") {
+          // No key and an empty base URL: no judgment server at all, not the default one.
+          delete env.TYPESAFE_API_KEY;
+          env.TYPESAFE_BASE_URL = "";
+        }
         const tool = mode === "read" ? "read" : "jev_search";
         const prompt = `Use ${tool} on guide.md to answer this question: ${task.query} ${mode === "read" ? "Read the full file." : 'Use the question verbatim as query, paths ["guide.md"], and limit 3.'} Return only the exact action code or command. If the source does not state an answer, return UNKNOWN.`;
         const start = performance.now();

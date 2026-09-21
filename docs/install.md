@@ -11,8 +11,9 @@ Pi loads it directly, so no build step is required.
 - The workspace default model is `opencode-go/deepseek-v4.1-flash`, configured as
   `defaultProvider`/`defaultModel` in `~/.pi/agent/settings.json`. Any configured model works;
   the extension does not configure or download models.
-- Optional: a `TYPESAFE_API_KEY` for hosted Jev ranking. Without it, `jev_search`
-  still works using local retrieval and no network requests are made.
+- A judgment server. The default is a self-hosted DiffusionGemma structured-read server on
+  `http://127.0.0.1:8011`; hosted Jev is opt-in (see [Judgment server](#judgment-server)).
+  With no server reachable, `jev_search` still works using local retrieval.
 
 ## Install dependencies
 
@@ -38,10 +39,10 @@ pi -e ./src/index.ts --model opencode-go/deepseek-v4.1-flash
 - Use your own configured provider/model id; the extension does not configure or download models.
 - Nothing is written to settings, so the extension disappears when the process exits.
 
-To set the hosted key for that run:
+To use hosted Jev for that run:
 
 ```sh
-TYPESAFE_API_KEY=... pi -e ./src/index.ts --model opencode-go/deepseek-v4.1-flash
+TYPESAFE_BASE_URL=https://api.typesafe.ai TYPESAFE_API_KEY=... pi -e ./src/index.ts --model opencode-go/deepseek-v4.1-flash
 ```
 
 ## Option 2 — Install a local checkout persistently
@@ -66,8 +67,8 @@ pi list
 ```
 
 Pi discovers `./src/index.ts` through the package `pi` manifest. To check the extension is
-active, start Pi and run `/jev status`; the status bar shows `Jev: on` when a key is set and
-`Jev: off` otherwise.
+active, start Pi and run `/jev status`; the status bar shows `Jev: on` unless the judgment
+server was switched off (`Jev: off`).
 
 ### Install for a single project instead
 
@@ -113,35 +114,46 @@ pi install npm:@your-scope/pi-jev@0.1.0
 To publish it yourself, remove `"private": true` from `package.json`, add the
 `pi-package` keyword (already present) and a version, then `npm publish`.
 
-## Configure the hosted key
+## Judgment server
 
-The extension reads `TYPESAFE_API_KEY` from the environment at load time. Export it in your
-shell profile so every Pi session inherits it:
+**Default: self-hosted DiffusionGemma.** With `TYPESAFE_BASE_URL` unset, the extension sends
+judgments to `http://127.0.0.1:8011` and adds `{"samples":1}` to every request. That is the
+DiffusionGemma structured-read server from
+[vllm-project/vllm#57250](https://github.com/vllm-project/vllm/pull/57250) with the
+single-sample reads [VALIDATION.md](../VALIDATION.md) adopted. No key is needed. Run the
+server on the same machine, or forward the port from the machine that has it:
 
 ```sh
-export TYPESAFE_API_KEY="..."
+ssh -N -L 127.0.0.1:8011:127.0.0.1:8011 gpu-host
 ```
 
-## Point at a self-hosted server
-
-`TYPESAFE_BASE_URL` replaces the hosted origin with any server that speaks the same
-`POST /v1/systemone` contract, such as the DiffusionGemma structured-read server from
-[vllm-project/vllm#57250](https://github.com/vllm-project/vllm/pull/57250). A key is then
-optional; if `TYPESAFE_API_KEY` is also set it is still sent as a bearer token. Only `http`
-and `https` URLs are accepted, and a path prefix is kept:
+**Another self-hosted server.** `TYPESAFE_BASE_URL` takes any server that speaks the same
+`POST /v1/systemone` contract. Only `http` and `https` URLs are accepted, and a path prefix is
+kept. The default `{"samples":1}` is not sent to it; set `TYPESAFE_REQUEST_EXTENSIONS` if it
+wants extensions. If `TYPESAFE_API_KEY` is set it is sent as a bearer token.
 
 ```sh
 export TYPESAFE_BASE_URL="http://192.168.0.4:8011"
 ```
 
+**Hosted Jev (opt-in).** Name the hosted service and export its key in your shell profile:
+
+```sh
+export TYPESAFE_BASE_URL="https://api.typesafe.ai"
+export TYPESAFE_API_KEY="..."
+```
+
+An empty `TYPESAFE_BASE_URL=` means no self-hosted server: hosted Jev if a key is set,
+otherwise no judgment server at all (the benchmarks use this for their baselines).
+
 Two further settings exist for tuning a self-hosted server; both are read at load time and
-reported by `/jev status`:
+reported by `/jev status`, which also shows the server in use:
 
 - `TYPESAFE_REQUEST_EXTENSIONS`: a JSON object of extra top-level request fields the server
   understands, sent with every judgment. The core fields (`model`, `state`, `questions`) cannot
   be overridden. For the DiffusionGemma structured-read server, `{"samples":1}` asks for a
   single denoise read instead of its adaptive re-sampling; see VALIDATION.md for the measured
-  effect. The hosted service needs none.
+  effect. It is the default for the default server only. The hosted service needs none.
 - `TYPESAFE_CONFIDENCE`: the confidence a judgment needs before it changes anything (skill
   suggestions, condensed excerpts, withheld output), from 0.5 to 1. The default 0.8 was tuned on
   the hosted service's calibrated confidence. Values outside the range are ignored.
@@ -168,8 +180,11 @@ Inside a running session, use the `/jev` command:
 
 ## Troubleshooting
 
-- **`/jev status` shows `Jev: off`** — no `TYPESAFE_API_KEY` was visible to the Pi process.
-  Export it in the same shell that launches `pi`, or pass it inline.
+- **`/jev status` shows `Jev: off`** — `TYPESAFE_BASE_URL` is empty and no `TYPESAFE_API_KEY`
+  was visible to the Pi process. Unset the variable for the default server, or export the key
+  in the same shell that launches `pi`.
+- **Nothing is condensed and `/jev status` counts failures** — the default server on
+  `127.0.0.1:8011` is not reachable. Start it or the SSH tunnel, or set `TYPESAFE_BASE_URL`.
 - **The extension does not appear in `pi list`** — a project-local install is hidden until the
   project is trusted; run `pi list --approve`, or check the global scope without `-l`.
 - **A local path stopped working** — relative local paths are resolved against the settings

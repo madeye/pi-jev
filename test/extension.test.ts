@@ -10,7 +10,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import jevExtension from "../src/index.ts";
+import jevExtension, { defaultServer, hostedServer, serverOptions } from "../src/index.ts";
 import { JevClient } from "../src/jev.ts";
 
 const event: BeforeAgentStartEvent = {
@@ -150,4 +150,28 @@ test("a session shutdown invalidates a pending suggestion", async () => {
   assert.ok(release);
   release(Response.json(payload));
   assert.equal(await pending, undefined);
+});
+
+test("the environment defaults to the DiffusionGemma server; hosted and off are explicit", () => {
+  assert.deepEqual(serverOptions({}), {
+    apiKey: undefined,
+    baseUrl: "http://127.0.0.1:8011",
+    extensions: { samples: 1 },
+  });
+  assert.equal(new JevClient(serverOptions({})).configured, true);
+  // A key alone no longer selects the hosted service.
+  assert.equal(serverOptions({ TYPESAFE_API_KEY: "k" }).baseUrl, defaultServer.baseUrl);
+  // Hosted Jev: named explicitly, and sent none of the default server's request extensions.
+  const hosted = serverOptions({ TYPESAFE_API_KEY: "k", TYPESAFE_BASE_URL: hostedServer });
+  assert.deepEqual(hosted, { apiKey: "k", baseUrl: hostedServer, extensions: undefined });
+  // An empty base URL means no self-hosted server: hosted with a key, otherwise off.
+  assert.equal(new JevClient(serverOptions({ TYPESAFE_BASE_URL: "" })).configured, false);
+  assert.equal(
+    new JevClient(serverOptions({ TYPESAFE_BASE_URL: "", TYPESAFE_API_KEY: "k" })).configured,
+    true,
+  );
+  // The user's own request extensions replace the default ones.
+  assert.deepEqual(serverOptions({ TYPESAFE_REQUEST_EXTENSIONS: '{"samples":4}' }).extensions, {
+    samples: 4,
+  });
 });

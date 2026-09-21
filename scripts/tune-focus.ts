@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { setConfidenceFloor } from "../src/decisions.ts";
 import { focusOutput } from "../src/focus.ts";
+import { serverOptions } from "../src/index.ts";
 import { JevClient } from "../src/jev.ts";
 import { bashPrompt, files, relevantFiles, tasks } from "./fixture-policy.ts";
 
@@ -13,7 +14,8 @@ import { bashPrompt, files, relevantFiles, tasks } from "./fixture-policy.ts";
  * or a distractor file is withheld. A relevant file whose current value is lost counts as a
  * failure regardless of bytes saved. Timeouts count as pass-throughs, as they would in use.
  *
- * Set TYPESAFE_BASE_URL (and TYPESAFE_API_KEY for the hosted service). Grids come from
+ * Targets the default DiffusionGemma server unless TYPESAFE_BASE_URL says otherwise (hosted:
+ * https://api.typesafe.ai with TYPESAFE_API_KEY). Grids come from
  * PI_TUNE_FLOORS (comma list, default 0.8,0.7,0.6,0.5) and PI_TUNE_EXTENSIONS (a JSON array
  * of request-extension objects, default below). Reports go to results/tune-focus*.json.
  */
@@ -68,13 +70,13 @@ for (const ext of extensions) {
   // One client per extension set: identical bodies within it hit the exact-result cache, so the
   // floor sweep re-decides on the same judgments instead of re-asking the server.
   const client = new JevClient({
-    apiKey: process.env.TYPESAFE_API_KEY,
-    baseUrl: process.env.TYPESAFE_BASE_URL,
+    ...serverOptions(),
     extensions: Object.keys(ext).length ? ext : undefined,
     cacheTtlMs: 600_000,
     cooldownMs: 0,
   });
-  if (!client.configured) throw new Error("Set TYPESAFE_BASE_URL or TYPESAFE_API_KEY");
+  if (!client.configured)
+    throw new Error("TYPESAFE_BASE_URL is empty and no TYPESAFE_API_KEY is set");
   await client.warm();
   for (const floor of floors) {
     setConfidenceFloor(floor);
@@ -141,7 +143,7 @@ for (const ext of extensions) {
 
 await mkdir("results", { recursive: true });
 const report = {
-  baseUrl: process.env.TYPESAFE_BASE_URL ?? "hosted",
+  baseUrl: serverOptions().baseUrl || "hosted",
   scope:
     "Focus decisions on the frozen policy fixture through the extension's focusOutput path and 3-second deadline, without a generator. Ideal = relevant file condensed with its current value, distractor withheld. Not a coding-quality or end-to-end claim.",
   floors,

@@ -34,9 +34,9 @@ const allModes = ["read", "local", "jev", "bash", "focus"];
 const hosted = (mode: string) => mode === "jev" || mode === "focus";
 if (modes.length === 0 || modes.some((mode) => !allModes.includes(mode)))
   throw new Error(`PI_BENCH_MODES must be a comma-separated subset of ${allModes.join(",")}`);
-if (modes.some(hosted) && !process.env.TYPESAFE_API_KEY)
+if (modes.some(hosted) && process.env.TYPESAFE_BASE_URL === "" && !process.env.TYPESAFE_API_KEY)
   throw new Error(
-    "Set TYPESAFE_API_KEY for the jev and focus modes, use PI_BENCH_MODES=read,local, or run bench:retrieval for keyless retrieval",
+    "The jev and focus modes need a judgment server: unset TYPESAFE_BASE_URL for the default one, or set TYPESAFE_API_KEY for hosted Jev",
   );
 
 const baseEnv = { ...process.env, PI_TELEMETRY: "0" };
@@ -58,7 +58,11 @@ for (let repeat = 0; repeat < repeats; repeat++) {
       const timingPath = join(cwd, "timings.jsonl");
       const observer = join(cwd, "observer.ts");
       const env: NodeJS.ProcessEnv = { ...baseEnv };
-      if (!hosted(mode)) delete env.TYPESAFE_API_KEY;
+      if (!hosted(mode)) {
+        // No key and an empty base URL: no judgment server at all, not the default one.
+        delete env.TYPESAFE_API_KEY;
+        env.TYPESAFE_BASE_URL = "";
+      }
       for (const [name, content] of Object.entries(files)) {
         await writeFile(join(cwd, name), `${content}\n`);
       }

@@ -26,18 +26,23 @@ pi install git:github.com/madeye/pi-jev@v0.1.0
 
 Verify and manage the install with `pi list`, `pi config` (enable/disable resources),
 `pi update --extensions`, and `pi remove <source>`. Inside a session, `/jev status`
-shows whether the extension is active. The hosted key is read from the environment at
-load time: `export TYPESAFE_API_KEY=...`. `TYPESAFE_BASE_URL` points the same requests at a
-self-hosted Jev-compatible server instead, with `TYPESAFE_REQUEST_EXTENSIONS` and
-`TYPESAFE_CONFIDENCE` for tuning it (see [docs/install.md](docs/install.md)). Without
-either, `jev_search` still works using local retrieval, and `--jev-speed`/`--jev-skills`/`--jev-tools` stay disabled.
+shows whether the extension is active and which judgment server it uses.
+
+**Judgment server.** By default the extension sends judgments to a self-hosted
+DiffusionGemma structured-read server at `http://127.0.0.1:8011` with single-sample reads
+(`{"samples":1}`), the configuration [VALIDATION.md](VALIDATION.md) adopted; no key is needed.
+`TYPESAFE_BASE_URL` names another Jev-compatible server. Hosted Jev is opt-in:
+`export TYPESAFE_BASE_URL=https://api.typesafe.ai` together with `TYPESAFE_API_KEY`.
+`TYPESAFE_REQUEST_EXTENSIONS` and `TYPESAFE_CONFIDENCE` tune a server (see
+[docs/install.md](docs/install.md)). If no server answers, `jev_search` still works using
+local retrieval and tool output passes through unchanged.
 
 ## Run
 
 Requires Node 22+ and `@earendil-works/pi-coding-agent` 0.85.1. The current package pins compatibility to the 0.85 series; older `@mariozechner` Pi releases are not tested. Install it first as described in [Install into Pi](#install-into-pi).
 
 ```sh
-# Set TYPESAFE_API_KEY in your shell, then:
+# With the DiffusionGemma server reachable on 127.0.0.1:8011 (or TYPESAFE_BASE_URL set):
 pi -e ./src/index.ts --model opencode-go/deepseek-v4.1-flash
 ```
 
@@ -57,7 +62,7 @@ For quick evidence lookup in the interactive Pi session:
 
 This fast path returns excerpts, not a synthesized answer. It also works without a Jev key using local retrieval. For headless use, select `--mode json` to receive the `jev-find` custom-message event; Pi's text print mode only prints assistant responses, so it does not print this command's result.
 
-Loading the extension with `TYPESAFE_API_KEY` set enables hosted ranking when its tools are called. There is no automatic request before model generation by default. Without a key, `jev_search` still performs local retrieval.
+Loading the extension enables ranking by the judgment server when its tools are called. There is no automatic request before model generation by default. When the server is unreachable, `jev_search` still performs local retrieval.
 
 ## Experimental adaptive thinking
 

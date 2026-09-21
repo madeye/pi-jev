@@ -56,7 +56,11 @@ for (let repeat = 0; repeat < repeats; repeat++) {
     for (const mode of (repeat + index) % 2 ? ["jev", "read"] : ["read", "jev"]) {
       const cwd = await mkdtemp(join(tmpdir(), "pi-jev-coding-"));
       const env: NodeJS.ProcessEnv = { ...baseEnv };
-      if (mode === "read") delete env.TYPESAFE_API_KEY;
+      if (mode === "read") {
+        // No key and an empty base URL: no judgment server at all, not the default one.
+        delete env.TYPESAFE_API_KEY;
+        env.TYPESAFE_BASE_URL = "";
+      }
       const sections = [
         ...task.docs,
         ...Array.from(
