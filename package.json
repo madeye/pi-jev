@@ -30,7 +30,9 @@
     "bench:coding": "tsx scripts/bench-coding.ts",
     "bench:cache": "tsx scripts/bench-cache.ts",
     "bench:direct": "tsx scripts/bench-direct.ts",
-    "tune:focus": "tsx scripts/tune-focus.ts"
+    "tune:focus": "tsx scripts/tune-focus.ts",
+    "replay:sessions": "tsx scripts/replay-sessions.ts",
+    "replay:locate": "tsx scripts/replay-locate.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.85.1 <0.86.0"

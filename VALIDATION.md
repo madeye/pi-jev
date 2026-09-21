@@ -11,6 +11,7 @@ Environment: macOS on Apple Silicon, Node 25.9.0, installed Pi 0.85.1. Generator
 - **The hosted service's network path decided its results here.** The same code saved 26% or 79% of input tokens on the same day depending only on whether hosted Jev answered within the deadline.
 - **Adopted configuration:** the self-hosted DiffusionGemma server (`TYPESAFE_BASE_URL`) with single-sample reads (`TYPESAFE_REQUEST_EXTENSIONS='{"samples":1}'`) and the default 0.8 confidence floor. It saves 76–78% of input tokens with no timeouts, level with hosted Jev's best run. Details in [Judgment server](#judgment-server-hosted-jev-and-self-hosted-diffusiongemma).
 - **Rejected:** jeff (GLiFormer), which produced no usable judgment on this task; Nemotron-Labs-Diffusion-8B read through its AR mode, which ranks correctly but saved 38–40% because most judgments missed the deadline under parallel tool calls; lowering the confidence floor to 0.7; the interposer's `think` and `steps` extensions, which crash the engine.
+- **Further use cases** were sized on this machine's real Pi sessions: tool results are re-sent about 25 times, `read` is as large as `bash` and untouched, file-location ranking failed, and search expansion (`--jev-expand`) helps when it applies but rarely does. See [Further use cases](#further-use-cases-sized-on-real-sessions).
 - Open items are listed at the [end](#open-items).
 
 ## Automated checks
@@ -285,6 +286,39 @@ End to end, same paired benchmark, three repetitions, all 24 answers correct:
 The baselines differ because the generator itself read fewer files in some `bash` runs (one Nemotron-session baseline run used a tenth of the usual tokens, which is the whole of that row's gap between −15% and −28%), so the third column measures every server against the same full-read baseline. Hosted Jev answered on a good network this session and DiffusionGemma landed below its earlier −76/−78% with the same settings, inside the generator variance noted above, and while sharing the GPU with a third loaded engine. Nemotron judged 10 of 32 tool results and withheld none.
 
 The floor made no difference because latency, not calibration, decided the run. Pi issues the five `cat` calls together, so five requests of twelve reads each prefill five cold 15 KB states at once on a dense 8B model: the reader's median judgment took 2.0 s (maximum 3.9 s) before the tunnel, and more than half of the tool results passed through on the 3-second deadline. DiffusionGemma activates 4B parameters and answers a twelve-question request in two passes rather than twelve. The 3B variant would prefill faster but starts from softer judgments still. DiffusionGemma stays the default; the Nemotron stack is stopped and its compose project kept at `~/workspace/nemotron-diffusion` on the Spark.
+
+## Further use cases, sized on real sessions
+
+Where else could a judgment model save input tokens or tool calls? Sized on 2026-09-21 against this machine's own Pi history (29 sessions, 584 model requests, 665 tool results, 21.4M input tokens; mostly `deepseek-v4.1-flash`; a mix of code work and ops debugging over `ssh`), not the frozen fixtures. `npm run replay:sessions` and `npm run replay:locate` reproduce the judged parts against the configured server; the logs themselves stay local.
+
+**Where the tokens go.**
+
+- A tool result is sent again with every later request. 1.63 MB of tool output became 39.2 MB of carried bytes, roughly 9.8M of the 21.4M input tokens: every byte kept out of a result is saved about 25 times.
+- 93% of input tokens were provider cache reads. Rewriting *old* messages (a `context` hook that prunes stale results) would invalidate that cache on every rewrite, so the saving has to be made when a result first enters the context. History pruning is rejected for cached hosted generators; it remains open for compaction boundaries.
+- Results of 4 KB or more are 70% of tool-output bytes: `bash` 569 KB in 54 results and `read` 575 KB in 49 results. `--jev-tools` does not touch `read`. Of those 49 large reads only 2 (9.6 KB) were of files the session later edited, and 42 were whole-file reads.
+- Results of 2–4 KB are another 15% of bytes and sit under the focusing floor. Untested.
+
+**Replayed through the real focusing path** (`focusOutput`, 3-second deadline, DiffusionGemma with `samples: 1`; no generator, so this sizes the saving and cannot show answers stay correct):
+
+| Tool | Results ≥ 4 KB | Condensed / passed / failed | Bytes | Carried bytes | Identifiers the model used next that survive |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `bash` | 54 | 17 / 31 / 6 | −37% | −23% | 22 of 54 |
+| `read` | 49 | 17 / 32 / 0 | −28% | −27% | 0 of 2 |
+
+Nothing was withheld. The saving is a third of the fixtures' (−66% to −78%) because real output is code and diagnostics, where few excerpts are confidently "direct evidence" for the request. The retention column is the warning: of the backticked identifiers the model used in its next two messages and that occurred in the result, under half survive condensing. On comprehension work the model uses more of an output than the passage that answers the prompt. Focusing `read` is therefore the largest untapped saving (32% of carried bytes) but is not enabled: it needs a live A/B on code tasks that counts repeated reads, and probably a form that keeps structure (signatures, headings) beside the judged excerpts.
+
+**File location: negative.** Before its first edit a session spent 18 tool calls on average (`ls`, `cat`, `grep`, `read`). Ranking every tracked file against the request from its path and first eight lines put the files the session then opened at chance: 3 of 9, 6 of 20 and 1 of 3 in the top ten (61, 36 and 31 files). Exploration opens orientation files (README, manifests, configuration) that no relevance judgment singles out. A shortlist would not replace it.
+
+**Search expansion (`--jev-expand`): works when it applies, rarely applies.** 36 of 122 search results (30%) were followed by opening a file the result had just named, 30 of them at the cost of a further model request (`rg -n "reject_non_ech"`, then `rg -n -A30 "reject_non_ech"`). The flag appends the lines around the best-ranked `path:line:` matches to the search result itself, removing nothing. The condensing bar (score 1.5 at 0.8 confidence) is never met by a single matched line, so rank decides: the top three matches scoring at least 0.6. A question fitted to the purpose ("how useful would the surrounding code be?") ranked worse than the evidence question (flat scores near 0.4 confidence, a test and a doc comment on top), so the evidence question stayed. Live A/B in a real Rust repository, three lookup questions, four repetitions, alternating order, all 24 answers correct:
+
+| | Model requests | Tool calls | Input tokens | Output tokens | Results expanded |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `bash` | 42 | 34 | 203,104 | 5,248 | — |
+| `bash` + `--jev-expand` | 38 | 29 | 173,066 | 4,604 | 4 of 12 runs |
+
+The direction is right (−10% requests, −15% input tokens) but it rests on four expansions, inside generator variance. And against the logged sessions the hook is narrow: of 218 `bash` calls involving `grep` or `rg`, 28 were a single search command and 3 had two or more `path:line:` matches under 4 KB; the rest were compound diagnostics, pipelines, file lists (`-l`) or already carried context flags. It stays an opt-in experiment.
+
+**Needs no judgment model.** 14 of 46 edits were followed within two calls by re-opening the same file, and 12 reads were of a file already read in the session. An edit result that shows the changed lines, and a note on an unchanged re-read, are deterministic.
 
 ## Direct lookup: measured speed path
 

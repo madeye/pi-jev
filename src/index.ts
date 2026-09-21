@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { rankPassages, setConfidenceFloor, suggestSkill } from "./decisions.ts";
+import { expandMatches, searchDirectory } from "./expand.ts";
 import { focusableTools, focusOutput, readOnlyCommand } from "./focus.ts";
 import { JevClient, type Outcome } from "./jev.ts";
 import { parseFindArguments, searchFiles } from "./retrieval.ts";
@@ -50,6 +51,8 @@ export default function jevExtension(
     focusedBytesSaved: 0,
     withheldResults: 0,
     withheldBytes: 0,
+    expandedResults: 0,
+    expandedMatches: 0,
   };
   const record = (outcome?: Outcome) => {
     if (!outcome) return;
@@ -69,6 +72,12 @@ export default function jevExtension(
   });
   pi.registerFlag("jev-skills", {
     description: "Opt into experimental skill advice (adds a request before model generation)",
+    type: "boolean",
+    default: false,
+  });
+  pi.registerFlag("jev-expand", {
+    description:
+      "Experimental: append the code around the search matches Jev judges relevant, saving the follow-up read",
     type: "boolean",
     default: false,
   });
@@ -219,6 +228,33 @@ export default function jevExtension(
       .join("")
       .trim()
       .slice(-500);
+  });
+  pi.on("tool_result", async (event, ctx) => {
+    if (!enabled || !pi.getFlag("jev-expand") || !request || event.isError) return;
+    const [part] = event.content;
+    if (event.content.length !== 1 || part?.type !== "text") return;
+    // Large search output is a survey: that is output focusing's case, not this one.
+    if (Buffer.byteLength(part.text) >= 4000) return;
+    const directory =
+      event.toolName === "grep"
+        ? ctx.cwd
+        : event.toolName === "bash"
+          ? searchDirectory(String(event.input.command ?? ""), ctx.cwd)
+          : undefined;
+    if (!directory) return;
+    const currentEpoch = epoch;
+    const { text, expanded, outcome } = await expandMatches(
+      client,
+      `${request}${intent ? `\nAssistant intent: ${intent}` : ""}`,
+      part.text,
+      directory,
+      ctx.signal,
+    );
+    record(outcome);
+    if (!text || !enabled || epoch !== currentEpoch || ctx.signal?.aborted) return;
+    stats.expandedResults++;
+    stats.expandedMatches += expanded ?? 0;
+    return { content: [{ type: "text", text }] };
   });
   pi.on("tool_result", async (event, ctx) => {
     if (!enabled || !pi.getFlag("jev-tools") || !request || event.isError) return;
