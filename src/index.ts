@@ -75,6 +75,11 @@ export default function jevExtension(
     type: "boolean",
     default: false,
   });
+  pi.registerFlag("jev-read", {
+    description:
+      "Experimental, with --jev-tools: also condense whole-file read results; 'outline' keeps omitted declarations",
+    type: "string",
+  });
   pi.registerFlag("jev-expand", {
     description:
       "Experimental: append the code around the search matches Jev judges relevant, saving the follow-up read",
@@ -259,7 +264,17 @@ export default function jevExtension(
   pi.on("tool_result", async (event, ctx) => {
     if (!enabled || !pi.getFlag("jev-tools") || !request || event.isError) return;
     const [part] = event.content;
-    if (!focusableTools.has(event.toolName) || event.content.length !== 1 || part?.type !== "text")
+    // A ranged read is already targeted; a whole-file read is focused only on request.
+    const wholeRead =
+      event.toolName === "read" &&
+      Boolean(pi.getFlag("jev-read")) &&
+      event.input.offset === undefined &&
+      event.input.limit === undefined;
+    if (
+      !(focusableTools.has(event.toolName) || wholeRead) ||
+      event.content.length !== 1 ||
+      part?.type !== "text"
+    )
       return;
     const call = `${event.toolName}:${JSON.stringify(event.input)}`;
     if (focused.delete(call)) return;
@@ -271,6 +286,8 @@ export default function jevExtension(
       ctx.signal,
       // A command with side effects may report them in output that looks unrelated.
       event.toolName !== "bash" || readOnlyCommand(String(event.input.command ?? "")),
+      undefined,
+      wholeRead && pi.getFlag("jev-read") === "outline",
     );
     record(outcome);
     if (!text || !enabled || epoch !== currentEpoch || ctx.signal?.aborted) return;

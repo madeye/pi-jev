@@ -12,6 +12,10 @@ export const readOnlyCommand = (command: string) =>
   !/[>`]|\$\(/.test(command) &&
   command.split(/\|\||&&|[|;\n]/).every((part) => readOnly.test(part.trim()));
 
+/** Lines that map a source or Markdown file: top-level declarations and headings. */
+const declaration =
+  /^\s{0,4}(?:#{1,4}\s|(?:pub(?:\([a-z]+\))?\s+)?(?:async\s+)?(?:fn|struct|enum|trait|impl|mod|const|static|type)\s|(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|const|enum)\s|(?:async\s+)?def\s|class\s|func\s)/;
+
 const confidentlyUnrelated = (p: RankedPassage) =>
   p.score !== undefined && p.score < 0.5 && confident(p.confidence);
 
@@ -28,6 +32,8 @@ export async function focusOutput(
   signal?: AbortSignal,
   withhold = false,
   keep = 6,
+  /** Keep the declarations and headings of omitted lines, with line numbers: a file's map. */
+  outline = false,
 ): Promise<{ text?: string; withheld?: boolean; outcome?: Outcome }> {
   const bytes = Buffer.byteLength(text);
   if (!query.trim() || bytes < 4000) return {};
@@ -60,10 +66,18 @@ export async function focusOutput(
   let focused = "";
   let next = 1;
   let keptLines = 0;
+  const allLines = outline ? text.split("\n") : [];
+  let outlined = 0;
   const gap = (until: number) => {
     if (until < next) return;
     if (focused && !focused.endsWith("\n")) focused += "\n";
     focused += `[jev: lines ${next}-${until} omitted]\n`;
+    for (let line = next; outline && line <= until && outlined < 80; line++) {
+      const content = allLines[line - 1] ?? "";
+      if (!declaration.test(content)) continue;
+      focused += `  ${line}: ${content.trim().slice(0, 140)}\n`;
+      outlined++;
+    }
   };
   for (const chunk of kept) {
     gap(chunk.startLine - 1);
@@ -75,7 +89,7 @@ export async function focusOutput(
   if (!focused.endsWith("\n")) focused += "\n";
   focused += withheld
     ? `[jev: withheld ${lineCount - keptLines} of ${lineCount} lines: every sampled excerpt was judged unrelated to the user's request. Continue without this output; only if you need it, repeat the identical tool call for the complete output.]`
-    : `[jev: kept ${keptLines} of ${lineCount} lines: excerpts judged direct evidence for the user's request, plus the final excerpt. Omitted lines ranked lower. Answer from these excerpts when they suffice; only if evidence is missing, repeat the identical tool call for the complete output.]`;
+    : `[jev: kept ${keptLines} of ${lineCount} lines: excerpts judged direct evidence for the user's request, plus the final excerpt${outline ? ", and the declarations of omitted lines with their line numbers" : ""}. Omitted lines ranked lower. Answer from these excerpts when they suffice; only if evidence is missing, repeat the identical tool call for the complete output.]`;
   return Buffer.byteLength(focused) > bytes * 0.7
     ? { outcome }
     : { text: focused, withheld, outcome };

@@ -226,3 +226,26 @@ test("unrelated output is withheld for inspection commands but not for side effe
     undefined,
   );
 });
+
+test("outline keeps the declarations of omitted lines, with line numbers", async () => {
+  const source = Array.from({ length: 40 }, (_, i) =>
+    i === 17
+      ? "fn retry_delay() -> u64 {\n    250 // current retry delay\n}\n\n"
+      : `pub fn helper_${i}() {\n    // ${"unrelated padding text ".repeat(8)}\n}\n\n`,
+  ).join("");
+  const plain = await focusOutput(rankingClient("retry delay"), query, source, undefined, true);
+  const outlined = await focusOutput(
+    rankingClient("retry delay"),
+    query,
+    source,
+    undefined,
+    true,
+    6,
+    true,
+  );
+  assert.doesNotMatch(plain.text ?? "", /helper_3\(\)/);
+  assert.match(outlined.text ?? "", /^ {2}13: pub fn helper_3\(\) \{$/m);
+  assert.match(outlined.text ?? "", /250 \/\/ current retry delay/);
+  assert.match(outlined.text ?? "", /declarations of omitted lines/);
+  assert.doesNotMatch(outlined.text ?? "", /unrelated padding text .*helper_3/);
+});

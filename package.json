@@ -31,6 +31,7 @@
     "bench:cache": "tsx scripts/bench-cache.ts",
     "bench:direct": "tsx scripts/bench-direct.ts",
     "tune:focus": "tsx scripts/tune-focus.ts",
+    "bench:read": "tsx scripts/bench-read.ts",
     "replay:sessions": "tsx scripts/replay-sessions.ts",
     "replay:locate": "tsx scripts/replay-locate.ts"
   },

@@ -112,6 +112,7 @@ npm run eval:speed      # Six synthetic adaptive-routing requests
 npm run bench:local     # Ten local Pi runs, five with Jev advice
 npm run bench:retrieval # Eighteen Pi runs: read vs local retrieval vs Jev retrieval
 npm run bench:coding    # Eight Pi runs: two coding tasks, two modes, two repetitions
+npm run bench:read      # Does condensing whole-file read results pay? (measured: no) Needs PI_BENCH_REPO or ../ech-tls-tunnel
 npm run replay:sessions # Replay your own Pi session logs through output focusing (sends them to the judgment server)
 npm run replay:locate   # Could Jev have named the files a logged session opened? (negative so far)
 npm run bench:tps       # Throughput: context size, tool calls, TTFT and decode tok/s (also bash vs --jev-tools)
