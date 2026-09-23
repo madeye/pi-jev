@@ -23,10 +23,12 @@ export function jevOrigin(url?: string): string | undefined {
 
 export type Question =
   | { type: "choice"; instructions: string; criteria: Record<string, string> }
-  | { type: "score"; instructions: string; criteria: string[] };
+  | { type: "score"; instructions: string; criteria: string[] }
+  | { type: "noul"; instructions: string };
 export type Answer =
   | { type: "choice"; choice: string; confidence: number; probabilities: Record<string, number> }
-  | { type: "score"; score: number; confidence: number; probabilities: Record<string, number> };
+  | { type: "score"; score: number; confidence: number; probabilities: Record<string, number> }
+  | { type: "noul"; noul: number };
 export interface Evaluation {
   answers: Record<string, Answer>;
   model: string;
@@ -57,13 +59,9 @@ export function validResponse(
   }
   return Object.entries(questions).every(([id, question]) => {
     const answer = value.answers && (value.answers as Record<string, unknown>)[id];
-    if (
-      !isObject(answer) ||
-      answer.type !== question.type ||
-      !probability(answer.confidence) ||
-      !isObject(answer.probabilities)
-    )
-      return false;
+    if (!isObject(answer) || answer.type !== question.type) return false;
+    if (question.type === "noul") return probability(answer.noul);
+    if (!probability(answer.confidence) || !isObject(answer.probabilities)) return false;
     const keys =
       question.type === "choice"
         ? Object.keys(question.criteria)
@@ -111,6 +109,11 @@ export class JevClient {
     return jevOrigin(this.options.baseUrl) ?? defaultOrigin;
   }
 
+  /** The configured Jev origin (hosted default when no base URL was given). */
+  get baseUrl(): string {
+    return this.origin;
+  }
+
   /** A self-hosted server may not need a key; the hosted service always does. */
   get configured(): boolean {
     return Boolean(this.options.apiKey) || jevOrigin(this.options.baseUrl) !== undefined;
@@ -155,7 +158,7 @@ export class JevClient {
     if (signal?.aborted) return fail("cancelled");
     const body = JSON.stringify({
       ...this.options.extensions,
-      model: this.options.model ?? "jev-1.13.0",
+      model: this.options.model ?? "jev-latest",
       state,
       questions,
     });

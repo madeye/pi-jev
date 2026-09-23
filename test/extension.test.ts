@@ -34,7 +34,7 @@ const event: BeforeAgentStartEvent = {
         },
       },
     ],
-  },
+  } as BeforeAgentStartEvent["systemPromptOptions"],
 };
 const payload = {
   model: "jev-1.13.0",
@@ -63,7 +63,11 @@ function setup(client: JevClient, skillAdvice = true) {
     },
     sendMessage: (message: unknown, options: unknown) => messages.push({ message, options }),
     registerTool: () => {},
-    getFlag: (name: string) => (name === "jev-skills" ? skillAdvice : true),
+    getFlag: (name: string) => {
+      if (name === "jev-skills") return skillAdvice;
+      if (name === "jev-route" || name === "jev-offline") return false;
+      return true;
+    },
   } as unknown as ExtensionAPI;
   const previousKey = process.env.TYPESAFE_API_KEY;
   process.env.TYPESAFE_API_KEY = "test-only";

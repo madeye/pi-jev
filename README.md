@@ -59,6 +59,53 @@ This fast path returns excerpts, not a synthesized answer. It also works without
 
 Loading the extension with `TYPESAFE_API_KEY` set enables hosted ranking when its tools are called. There is no automatic request before model generation by default. Without a key, `jev_search` still performs local retrieval.
 
+## Fork: OpenRouter access and model routing (`--jev-route`)
+
+This fork is configured to reach Jev through **OpenRouter** instead of the TypeSafe host, using your OpenRouter API key:
+
+```sh
+export TYPESAFE_BASE_URL="https://openrouter.ai/api"   # Jev endpoint becomes .../api/v1/systemone
+export TYPESAFE_API_KEY="$OPENROUTER_API_KEY"          # OpenRouter key, not a TypeSafe key
+```
+
+The default Jev model was changed from `jev-1.13.0` (a TypeSafe alias that OpenRouter may not resolve) to `jev-latest`.
+
+### Automatic model routing with a local offline fallback
+
+`--jev-route` asks Jev to pick the **cheapest capable model** for each turn among three OpenRouter models, with a deterministic local fallback for offline/outage cases:
+
+| Target | Model | Role |
+|---|---|---|
+| DeepSeek Flash | `openrouter/deepseek/deepseek-v4-flash-0731` | routine / fast / cheap |
+| GLM Flash | `openrouter/z-ai/glm-5.3-flash` | balanced |
+| Kimi Code | `openrouter/moonshotai/kimi-k2.7-code` | heavy / code-specialist |
+| Local Qwen | `llama.cpp/qwen2.5-coder-1.5b-instruct-q4_k_m` | offline safety net |
+
+Routing behavior:
+- A confident Jev Choice promotes the cheapest capable model and switches the active session model via `pi.setModel(...)`.
+- If Jev is unconfigured, the cloud endpoint is unavailable, or you force it, work continues on the **local Qwen model** (no network needed).
+- A low-confidence judgment **leaves the current model unchanged** rather than downgrading.
+- `--jev-offline` (or `/jev offline`) forces the local model regardless of cloud/Jev availability; `/jev online` resumes.
+- `/jev status` reports the active route, confidence floor, fallback count, and last route under `routing`.
+
+The router uses its own confidence floor (default **0.6**, configurable via `TYPESAFE_ROUTE_CONFIDENCE` between 0.5 and 1) so it can act on the moderately-confident judgments Jev typically returns for routing, while the shared retrieval floor stays at 0.8 (`TYPESAFE_CONFIDENCE`).
+
+The route set is configurable via `TYPESAFE_ROUTE_MODELS`, a semicolon-separated `provider/model:label:description` list, cheapest-first (the provider is the first `provider/` token; the model ID may itself contain slashes, as with OpenRouter's `author/name` IDs):
+
+```sh
+export TYPESAFE_ROUTE_MODELS="openrouter/deepseek/deepseek-v4-flash-0731:Fast:quick edits;openrouter/z-ai/glm-5.3-flash:Balanced:general coding;openrouter/moonshotai/kimi-k2.7-code:Heavy:complex work;llama.cpp/qwen2.5-coder-1.5b-instruct-q4_k_m:Local:offline fallback"
+```
+
+Example:
+
+```sh
+pi -e ./src/index.ts --jev-route --model deepseek/deepseek-v4-flash-0731
+```
+
+## Package vetting (`jev_scout`)
+
+`jev_scout` guards against hallucinated dependencies. Before the model installs a package, it asks Jev a yes/no (`noul`) question over the package name and intended use and returns a probability; results below ~0.7 should be treated with suspicion. This adds a `noul` question type to the client's `Question`/`Answer` types (supported by both the native and OpenRouter `/v1/systemone` API). When Jev is off, it no-ops (reports `exists: true`) rather than blocking installs.
+
 ## Experimental adaptive thinking
 
 `pi -e ./src/index.ts --jev-speed --model local-qwen/qwen3.8-27b` enables an experimental speed route. Jev classifies the current request once before generation with a 3-second deadline (retrieval retains 1.5 seconds). A confident routine-task judgment sets `chat_template_kwargs.enable_thinking=false` on that turn's Qwen requests. Complex or ambiguous requests, images, oversized prompts, uncertain judgments, and service failures preserve the original payload. This adds a hosted request, so its net benefit must be measured.
