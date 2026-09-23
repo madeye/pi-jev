@@ -40,7 +40,7 @@ test("sends one request with the documented endpoint, pinned model, and only sup
       assert.equal(url, "https://api.typesafe.ai/v1/systemone");
       assert.equal(options?.redirect, "error");
       const body = JSON.parse(String(options?.body));
-      assert.equal(body.model, "jev-1.13.0");
+      assert.equal(body.model, "jev-latest");
       assert.deepEqual(body.state, { request: "Write a TypeScript module" });
       assert.equal(JSON.stringify(body).includes(skill.filePath), false);
       return Response.json(response({ skill: choice() }));
@@ -96,7 +96,7 @@ test("request extensions ride along without overriding the core fields", async (
     fetch: async (_url, options) => {
       const body = JSON.parse(String(options?.body));
       assert.equal(body.samples, 1);
-      assert.equal(body.model, "jev-1.13.0");
+      assert.equal(body.model, "jev-latest");
       assert.deepEqual(body.state, { request: "r" });
       assert.deepEqual(Object.keys(body.questions), ["skill"]);
       return Response.json(response({ skill: choice() }));
